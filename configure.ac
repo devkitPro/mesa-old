@@ -281,7 +281,7 @@ _SAVE_LDFLAGS="$LDFLAGS"
 _SAVE_CPPFLAGS="$CPPFLAGS"
 
 dnl Compiler macros
-DEFINES="-D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+DEFINES="-D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -D_GNU_SOURCE"
 AC_SUBST([DEFINES])
 android=no
 case "$host_os" in
@@ -339,13 +339,13 @@ AC_LANG_POP([C++])
 AC_SUBST([MSVC2013_COMPAT_CFLAGS])
 AC_SUBST([MSVC2013_COMPAT_CXXFLAGS])
 
-if test "x$GCC" = xyes; then
-    if test "x$USE_GNU99" = xyes; then
-        CFLAGS="$CFLAGS -std=gnu99"
-    else
-        CFLAGS="$CFLAGS -std=c99"
-    fi
-fi
+#if test "x$GCC" = xyes; then
+#    if test "x$USE_GNU99" = xyes; then
+#        CFLAGS="$CFLAGS -std=gnu99"
+#    else
+#        CFLAGS="$CFLAGS -std=c99"
+#    fi
+#fi
 
 dnl
 dnl Check whether C++11 is supported, if the environment variable
@@ -917,46 +917,48 @@ LIBS="$save_LIBS"
 
 AC_CHECK_FUNC([dl_iterate_phdr], [DEFINES="$DEFINES -DHAVE_DL_ITERATE_PHDR"])
 
-case "$host_os" in
-darwin*)
-    ;;
-*)
-    AC_CHECK_FUNCS([clock_gettime], [CLOCK_LIB=],
-                   [AC_CHECK_LIB([rt], [clock_gettime], [CLOCK_LIB=-lrt],
-                                 [AC_MSG_ERROR([Could not find clock_gettime])])])
-    AC_SUBST([CLOCK_LIB])
-    ;;
-esac
+#case "$host_os" in
+#darwin*)
+#    ;;
+#*)
+#    AC_CHECK_FUNCS([clock_gettime], [CLOCK_LIB=],
+#                   [AC_CHECK_LIB([rt], [clock_gettime], [CLOCK_LIB=-lrt],
+#                                 [AC_MSG_ERROR([Could not find clock_gettime])])])
+#    AC_SUBST([CLOCK_LIB])
+#    ;;
+#esac
 
 dnl See if posix_memalign is available
 AC_CHECK_FUNC([posix_memalign], [DEFINES="$DEFINES -DHAVE_POSIX_MEMALIGN"])
 
 dnl Check for zlib
-PKG_CHECK_MODULES([ZLIB], [zlib >= $ZLIB_REQUIRED])
-DEFINES="$DEFINES -DHAVE_ZLIB"
+#PKG_CHECK_MODULES([ZLIB], [zlib >= $ZLIB_REQUIRED])
+#DEFINES="$DEFINES -DHAVE_ZLIB"
 
 dnl Check for pthreads
-AX_PTHREAD
-if test "x$ax_pthread_ok" = xno; then
-    AC_MSG_ERROR([Building mesa on this platform requires pthreads])
-fi
+#AX_PTHREAD
+#if test "x$ax_pthread_ok" = xno; then
+#    AC_MSG_ERROR([Building mesa on this platform requires pthreads])
+#fi
 dnl AX_PTHREADS leaves PTHREAD_LIBS empty for gcc and sets PTHREAD_CFLAGS
 dnl to -pthread, which causes problems if we need -lpthread to appear in
 dnl pkgconfig files.  Since Android doesn't have a pthread lib, this check
 dnl is not valid for that platform.
-if test "x$android" = xno; then
-    test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
-fi
+#if test "x$android" = xno; then
+#    test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
+#fi
 dnl According to the manual when using pthreads, one should add -pthread to
 dnl both compile and link-time arguments.
 dnl In practise that should be sufficient for all platforms, since any
 dnl platforms build with GCC and Clang support the flag.
-PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
+#PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
+PKG_CHECK_MODULES([PTHREAD], [libnx])
+PTHREAD_CFLAGS=-I$DEVKITPRO/libnx/include
 
 dnl pthread-stubs is mandatory on some BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
 case "$host_os" in
-linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd*)
+linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd* | *-none*)
     pthread_stubs_possible="no"
     ;;
 * )
@@ -964,9 +966,9 @@ linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd*)
     ;;
 esac
 
-if test "x$pthread_stubs_possible" = xyes; then
-    PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
-fi
+#if test "x$pthread_stubs_possible" = xyes; then
+#    PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
+#fi
 
 dnl Check for futex for fast inline simple_mtx_t.
 AC_CHECK_HEADER([linux/futex.h], [DEFINES="$DEFINES -DHAVE_LINUX_FUTEX_H"])
@@ -1865,6 +1867,10 @@ for plat in $platforms; do
         DEFINES="$DEFINES -DHAVE_ANDROID_PLATFORM"
         ;;
 
+    switch)
+        DEFINES="$DEFINES -DHAVE_SWITCH_PLATFORM"
+        ;;
+
     *)
         AC_MSG_ERROR([platform '$plat' does not exist])
         ;;
@@ -2168,7 +2174,7 @@ if test -n "$with_vulkan_drivers"; then
 fi
 
 
-DEFINES="$DEFINES -DENABLE_SHADER_CACHE"
+#DEFINES="$DEFINES -DENABLE_SHADER_CACHE"
 AM_CONDITIONAL(NEED_MEGADRIVER, test -n "$DRI_DIRS")
 AM_CONDITIONAL(NEED_LIBMESA, test "x$enable_glx" = xxlib -o \
                                   "x$enable_osmesa" = xyes -o \
@@ -2699,8 +2705,8 @@ if test -n "$with_gallium_drivers"; then
             ;;
         xnouveau)
             HAVE_GALLIUM_NOUVEAU=yes
-            PKG_CHECK_MODULES([NOUVEAU], [libdrm >= $LIBDRM_NOUVEAU_REQUIRED libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
-            require_libdrm "nouveau"
+            #PKG_CHECK_MODULES([NOUVEAU], [libdrm >= $LIBDRM_NOUVEAU_REQUIRED libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
+            #require_libdrm "nouveau"
             ;;
         xfreedreno)
             HAVE_GALLIUM_FREEDRENO=yes
@@ -3066,6 +3072,9 @@ fi
 dnl Add user CFLAGS and CXXFLAGS
 CFLAGS="$CFLAGS $USER_CFLAGS"
 CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
+
+CFLAGS="$CFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE"
+CXXFLAGS="$CXXFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE"
 
 dnl Substitute the config
 AC_CONFIG_FILES([Makefile

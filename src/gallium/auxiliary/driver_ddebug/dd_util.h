@@ -38,7 +38,7 @@
 #include "util/u_string.h"
 
 #include "pipe/p_config.h"
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_SWITCH)
 #include <unistd.h>
 #include <sys/stat.h>
 #elif defined(PIPE_OS_WINDOWS)

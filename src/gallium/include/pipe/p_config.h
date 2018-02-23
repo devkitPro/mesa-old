@@ -160,6 +160,10 @@
 #define PIPE_OS_ANDROID
 #endif
 
+#if defined(HAVE_SWITCH_PLATFORM)
+#define PIPE_OS_SWITCH
+#endif
+
 #if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
 #define PIPE_OS_FREEBSD
 #define PIPE_OS_BSD

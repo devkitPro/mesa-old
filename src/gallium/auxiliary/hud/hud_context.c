@@ -1012,7 +1012,7 @@ static void strcat_without_spaces(char *dst, const char *src)
 }
 
 
-#ifdef PIPE_OS_WINDOWS
+#if defined(PIPE_OS_WINDOWS) || defined(HAVE_SWITCH_PLATFORM)
 #define W_OK 0
 static int
 access(const char *pathname, int mode)

@@ -586,7 +586,7 @@ test_sync_file_fences(struct pipe_context *ctx)
    pass = pass && screen->fence_finish(screen, NULL, final_fence, 0);
 
    /* Cleanup. */
-#ifndef PIPE_OS_WINDOWS
+#if !defined(PIPE_OS_WINDOWS) && !defined(PIPE_OS_SWITCH)
    if (buf_fd >= 0)
       close(buf_fd);
    if (tex_fd >= 0)

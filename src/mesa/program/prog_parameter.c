@@ -28,14 +28,12 @@
  * \author Brian Paul
  */
 
-
 #include "main/glheader.h"
 #include "main/imports.h"
 #include "main/macros.h"
 #include "prog_instruction.h"
 #include "prog_parameter.h"
 #include "prog_statevars.h"
-
 
 /**
  * Look for a float vector in the given parameter list.  The float vector

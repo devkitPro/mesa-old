@@ -47,6 +47,8 @@
 #  include <errno.h>
 #elif defined(PIPE_SUBSYSTEM_WINDOWS_USER)
 #  include <windows.h>
+#elif defined(HAVE_SWITCH_PLATFORM)
+#  include <switch/kernel/svc.h>
 #else
 #  error Unsupported OS
 #endif
@@ -83,6 +85,10 @@ os_time_get_nano(void)
       / frequency.QuadPart;
    return secs*INT64_C(1000000000) + nanosecs;
 
+#elif defined(HAVE_SWITCH_PLATFORM)
+
+   return (int64_t)svcGetSystemTick();
+
 #else
 
 #error Unsupported OS
@@ -110,6 +116,10 @@ os_time_sleep(int64_t usecs)
    if (dwMilliseconds) {
       Sleep(dwMilliseconds);
    }
+#elif defined(HAVE_SWITCH_PLATFORM)
+
+   svcSleepThread((u64)usecs * 1000);
+
 #else
 #  error Unsupported OS
 #endif
