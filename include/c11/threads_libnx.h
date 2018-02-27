@@ -76,9 +76,9 @@ static inline void
 call_once(once_flag *flag, void (*func)(void))
 {
     assert(flag && func);
-    if (__sync_val_compare_and_swap(&flag->status, 0, 1)) {
+    if (__sync_bool_compare_and_swap(&flag->status, 0, 1)) {
         (func)();
-        __sync_val_compare_and_swap(&flag->status, 1, 2);
+        flag->status = 2;
     } else {
         while (flag->status == 1) {
             // busy loop!
