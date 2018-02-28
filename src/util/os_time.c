@@ -38,8 +38,9 @@
 #include "gallium/include/pipe/p_config.h"
 
 #include "util/u_atomic.h"
+#include "c11/threads.h"
 
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_SWITCH)
 #  include <unistd.h> /* usleep */
 #  include <time.h> /* timeval */
 #  include <sys/time.h> /* timeval */
@@ -47,8 +48,6 @@
 #  include <errno.h>
 #elif defined(PIPE_SUBSYSTEM_WINDOWS_USER)
 #  include <windows.h>
-#elif defined(HAVE_SWITCH_PLATFORM)
-#  include <switch/kernel/svc.h>
 #else
 #  error Unsupported OS
 #endif
@@ -63,7 +62,7 @@ os_time_get_nano(void)
    clock_gettime(CLOCK_MONOTONIC, &tv);
    return tv.tv_nsec + tv.tv_sec*INT64_C(1000000000);
 
-#elif defined(PIPE_OS_UNIX)
+#elif defined(PIPE_OS_UNIX) || defined(PIPE_OS_SWITCH)
 
    struct timeval tv;
    gettimeofday(&tv, NULL);
@@ -84,10 +83,6 @@ os_time_get_nano(void)
    nanosecs = (counter.QuadPart % frequency.QuadPart) * INT64_C(1000000000)
       / frequency.QuadPart;
    return secs*INT64_C(1000000000) + nanosecs;
-
-#elif defined(HAVE_SWITCH_PLATFORM)
-
-   return (int64_t)svcGetSystemTick();
 
 #else
 
@@ -158,9 +153,7 @@ os_wait_until_zero(volatile int *var, uint64_t timeout)
 
    if (timeout == OS_TIMEOUT_INFINITE) {
       while (p_atomic_read(var)) {
-#if defined(PIPE_OS_UNIX)
-         sched_yield();
-#endif
+         thrd_yield();
       }
       return true;
    }
@@ -172,9 +165,7 @@ os_wait_until_zero(volatile int *var, uint64_t timeout)
          if (os_time_timeout(start_time, end_time, os_time_get_nano()))
             return false;
 
-#if defined(PIPE_OS_UNIX)
-         sched_yield();
-#endif
+         thrd_yield();
       }
       return true;
    }
@@ -194,9 +185,7 @@ os_wait_until_zero_abs_timeout(volatile int *var, int64_t timeout)
       if (os_time_get_nano() >= timeout)
          return false;
 
-#if defined(PIPE_OS_UNIX)
-      sched_yield();
-#endif
+      thrd_yield();
    }
    return true;
 }
