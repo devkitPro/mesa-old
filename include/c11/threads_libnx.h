@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <sched.h>
 #include <stdint.h> /* for intptr_t */
+#include <stdbool.h> /* for bool */
 #include <time.h>
 #include <sys/time.h>
 
@@ -186,17 +187,19 @@ mtx_lock(mtx_t *mtx)
 }
 
 // 7.25.4.4
-static inline int
-mtx_timedlock(mtx_t *mtx, const struct timespec *ts)
-{
-    return thrd_error;
-}
+//static inline int
+//mtx_timedlock(mtx_t *mtx, const struct timespec *ts);
 
 // 7.25.4.5
 static inline int
 mtx_trylock(mtx_t *mtx)
 {
-    return thrd_error;
+    bool result = false;
+    if (mtx->type & mtx_recursive)
+        result = rmutexTryLock(&mtx->rmutex);
+    else
+        result = mutexTryLock(&mtx->mutex);
+    return result ? thrd_success : thrd_busy;
 }
 
 // 7.25.4.6
@@ -281,24 +284,20 @@ thrd_yield(void)
 
 /*----------- 7.25.6 Thread-specific storage functions -----------*/
 // 7.25.6.1
-static inline int
-tss_create(tss_t *key, tss_dtor_t dtor)
-{ return thrd_error; }
+//static inline int
+//tss_create(tss_t *key, tss_dtor_t dtor);
 
 // 7.25.6.2
-static inline void
-tss_delete(tss_t key)
-{ }
+//static inline void
+//tss_delete(tss_t key);
 
 // 7.25.6.3
-static inline void *
-tss_get(tss_t key)
-{ return NULL; }
+//static inline void *
+//tss_get(tss_t key);
 
 // 7.25.6.4
-static inline int
-tss_set(tss_t key, void *val)
-{ return thrd_error; }
+//static inline int
+//tss_set(tss_t key, void *val);
 
 
 /*-------------------- 7.25.7 Time functions --------------------*/
