@@ -117,6 +117,8 @@ pipe_semaphore_wait(pipe_semaphore *sema)
  * Thread-specific data.
  */
 
+#if !defined(GLX_USE_TLS)
+
 typedef struct {
    tss_t key;
    int initMagic;
@@ -155,7 +157,7 @@ pipe_tsd_set(pipe_tsd *tsd, void *value)
    }
 }
 
-
+#endif
 
 /*
  * Thread statistics.
