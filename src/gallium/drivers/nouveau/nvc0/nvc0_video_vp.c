@@ -21,7 +21,6 @@
  */
 
 #include "nvc0/nvc0_video.h"
-#include <sys/mman.h>
 
 #if NOUVEAU_VP3_DEBUG_FENCE
 static void dump_comm_vp(struct nouveau_vp3_decoder *dec, struct comm *comm, u32 comm_seq,
@@ -50,8 +49,7 @@ static void dump_comm_vp(struct nouveau_vp3_decoder *dec, struct comm *comm, u32
       for (i = 0; i < comm->byte_ofs + slice_size; i += 0x10) {
          debug_printf("%05x: %08x %08x %08x %08x\n", i, map[i/4], map[i/4+1], map[i/4+2], map[i/4+3]);
       }
-      munmap(inter_bo->map, inter_bo->size);
-      inter_bo->map = NULL;
+      nouveau_bo_unmap(inter_bo);
    }
    assert((comm->pvp_stage & 0xff) == 0xff);
 }

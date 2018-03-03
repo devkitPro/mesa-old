@@ -20,7 +20,6 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <xf86drm.h>
 #include <nouveau_drm.h>
 #include <nvif/class.h>
 #include "util/u_format.h"

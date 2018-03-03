@@ -20,10 +20,10 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <nvif/class.h>
 
@@ -294,7 +294,7 @@ nouveau_vp3_load_firmware(struct nouveau_vp3_decoder *dec,
    if (nouveau_bo_map(dec->fw_bo, NOUVEAU_BO_WR, dec->client))
       return 1;
 
-   fd = open(path, O_RDONLY | O_CLOEXEC);
+   fd = open(path, O_RDONLY);
    if (fd < 0) {
       fprintf(stderr, "opening firmware file %s failed: %m\n", path);
       return 1;
@@ -348,8 +348,7 @@ nouveau_vp3_load_firmware(struct nouveau_vp3_decoder *dec,
       default:
          return 1;
    }
-   munmap(dec->fw_bo->map, dec->fw_bo->size);
-   dec->fw_bo->map = NULL;
+   nouveau_bo_unmap(dec->fw_bo);
    return 0;
 }
 

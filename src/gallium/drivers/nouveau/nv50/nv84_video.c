@@ -20,7 +20,6 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
@@ -34,7 +33,7 @@
 static int
 nv84_copy_firmware(const char *path, void *dest, ssize_t len)
 {
-   int fd = open(path, O_RDONLY | O_CLOEXEC);
+   int fd = open(path, O_RDONLY);
    ssize_t r;
    if (fd < 0) {
       fprintf(stderr, "opening firmware file %s failed: %m\n", path);
@@ -88,8 +87,7 @@ nv84_load_firmwares(struct nouveau_device *dev, struct nv84_decoder *dec,
    ret = nv84_copy_firmware(fw1, fw->map, size1);
    if (fw2 && !ret)
       ret = nv84_copy_firmware(fw2, fw->map + dec->vp_fw2_offset, size2);
-   munmap(fw->map, fw->size);
-   fw->map = NULL;
+   nouveau_bo_unmap(fw);
    if (!ret)
       return fw;
 error:
