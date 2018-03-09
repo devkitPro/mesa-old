@@ -70,6 +70,7 @@ static const struct {
    { _EGL_PLATFORM_ANDROID, "android" },
    { _EGL_PLATFORM_HAIKU, "haiku" },
    { _EGL_PLATFORM_SURFACELESS, "surfaceless" },
+   { _EGL_PLATFORM_SWITCH, "switch" },
 };
 
 
@@ -238,7 +239,7 @@ _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy)
          dpy->Platform = plat;
          dpy->PlatformDisplay = plat_dpy;
 
-         /* add to the display list */ 
+         /* add to the display list */
          dpy->Next = _eglGlobal.DisplayList;
          _eglGlobal.DisplayList = dpy;
       }

@@ -39,21 +39,23 @@
 
 /* a fallback thread info to guarantee that every thread always has one */
 static _EGLThreadInfo dummy_thread;
-static mtx_t _egl_TSDMutex = _MTX_INITIALIZER_NP;
-static EGLBoolean _egl_TSDInitialized;
-static tss_t _egl_TSD;
-static void (*_egl_FreeTSD)(_EGLThreadInfo *);
 
 #ifdef GLX_USE_TLS
 static __thread const _EGLThreadInfo *_egl_TLS
    __attribute__ ((tls_model("initial-exec")));
+#else
+static mtx_t _egl_TSDMutex = _MTX_INITIALIZER_NP;
+static EGLBoolean _egl_TSDInitialized;
+static tss_t _egl_TSD;
+static void (*_egl_FreeTSD)(_EGLThreadInfo *);
 #endif
 
 static inline void _eglSetTSD(const _EGLThreadInfo *t)
 {
-   tss_set(_egl_TSD, (void *) t);
 #ifdef GLX_USE_TLS
    _egl_TLS = t;
+#else
+   tss_set(_egl_TSD, (void *) t);
 #endif
 }
 
@@ -68,6 +70,7 @@ static inline _EGLThreadInfo *_eglGetTSD(void)
 
 static inline void _eglFiniTSD(void)
 {
+#ifndef GLX_USE_TLS
    mtx_lock(&_egl_TSDMutex);
    if (_egl_TSDInitialized) {
       _EGLThreadInfo *t = _eglGetTSD();
@@ -78,10 +81,12 @@ static inline void _eglFiniTSD(void)
       tss_delete(_egl_TSD);
    }
    mtx_unlock(&_egl_TSDMutex);
+#endif
 }
 
 static inline EGLBoolean _eglInitTSD(void (*dtor)(_EGLThreadInfo *))
 {
+#ifndef GLX_USE_TLS
    if (!_egl_TSDInitialized) {
       mtx_lock(&_egl_TSDMutex);
 
@@ -98,7 +103,7 @@ static inline EGLBoolean _eglInitTSD(void (*dtor)(_EGLThreadInfo *))
 
       mtx_unlock(&_egl_TSDMutex);
    }
-
+#endif
    return EGL_TRUE;
 }
 

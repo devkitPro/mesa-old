@@ -1922,6 +1922,7 @@ AM_CONDITIONAL(HAVE_PLATFORM_WAYLAND, echo "$platforms" | grep -q 'wayland')
 AM_CONDITIONAL(HAVE_PLATFORM_DRM, echo "$platforms" | grep -q 'drm')
 AM_CONDITIONAL(HAVE_PLATFORM_SURFACELESS, echo "$platforms" | grep -q 'surfaceless')
 AM_CONDITIONAL(HAVE_PLATFORM_ANDROID, echo "$platforms" | grep -q 'android')
+AM_CONDITIONAL(HAVE_PLATFORM_SWITCH, echo "$platforms" | grep -q 'switch')
 
 AC_ARG_ENABLE(xlib-lease,
     [AS_HELP_STRING([--enable-xlib-lease]
@@ -2245,7 +2246,7 @@ if test "x$enable_egl" = xyes; then
 
     AC_CHECK_FUNC(mincore, [DEFINES="$DEFINES -DHAVE_MINCORE"])
 
-    require_dri_shared_libs_and_glapi "egl"
+    #require_dri_shared_libs_and_glapi "egl"
 fi
 AM_CONDITIONAL(HAVE_EGL, test "x$enable_egl" = xyes)
 AC_SUBST([EGL_LIB_DEPS])

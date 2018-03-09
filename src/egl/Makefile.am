@@ -20,6 +20,7 @@
 # IN THE SOFTWARE.
 
 include Makefile.sources
+include $(top_srcdir)/src/gallium/Automake.inc
 
 MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
 
@@ -31,12 +32,21 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/egl/main \
 	-I$(top_srcdir)/src/gbm/main \
+	-I$(top_srcdir)/src/gallium/include \
+	-I$(top_srcdir)/src/gallium/drivers \
+	-I$(top_srcdir)/src/gallium/auxiliary \
+	-I$(top_srcdir)/src/gallium/winsys \
+	-I$(top_srcdir)/src/mesa \
 	-I$(top_srcdir)/src \
 	$(DEFINES) \
 	$(VISIBILITY_CFLAGS) \
 	$(LIBDRM_CFLAGS) \
 	$(EGL_CFLAGS) \
-	-D_EGL_NATIVE_PLATFORM=$(EGL_NATIVE_PLATFORM)
+    $(GALLIUM_CFLAGS) \
+	-D_EGL_NATIVE_PLATFORM=$(EGL_NATIVE_PLATFORM) \
+	-DSWITCH \
+	-DGALLIUM_SOFTPIPE \
+	-DGALLIUM_TRACE
 
 # Depending on whether libglvnd is enabled, we'll build the EGL library as
 # either libEGL.so.1 or libEGL_mesa.so.0. Using an automake substitution
@@ -53,6 +63,15 @@ libEGL_common_la_LIBADD = \
 dri2_backend_FILES =
 dri2_backend_GENERATED_FILES =
 dri3_backend_FILES =
+switch_backend_FILES =
+
+if HAVE_PLATFORM_SWITCH
+switch_backend_FILES += drivers/switch/egl_switch.c
+endif
+
+if HAVE_DRICOMMON
+dri2_backend_FILES += $(dri2_backend_core_FILES)
+endif
 
 if HAVE_PLATFORM_X11
 AM_CFLAGS += $(XCB_DRI2_CFLAGS)
@@ -126,9 +145,9 @@ nodist_libEGL_common_la_SOURCES = \
 	$(dri2_backend_GENERATED_FILES)
 
 libEGL_common_la_SOURCES += \
-	$(dri2_backend_core_FILES) \
 	$(dri2_backend_FILES) \
-	$(dri3_backend_FILES)
+	$(dri3_backend_FILES) \
+	$(switch_backend_FILES)
 
 libEGL_common_la_LIBADD += \
 	$(top_builddir)/src/loader/libloader.la \
@@ -176,7 +195,11 @@ libEGL_mesa_la_SOURCES = \
 	g_egldispatchstubs.h
 libEGL_mesa_la_LIBADD = \
 	libEGL_common.la \
-	$(top_builddir)/src/mapi/shared-glapi/libglapi.la
+	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
+	$(top_builddir)/src/mesa/libmesagallium.la \
+	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
+	$(top_builddir)/src/gallium/winsys/sw/null/libws_null.la \
+	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
 libEGL_mesa_la_LDFLAGS = \
 	-no-undefined \
 	-version-number 0 \
@@ -190,7 +213,12 @@ lib_LTLIBRARIES = libEGL.la
 libEGL_la_SOURCES =
 libEGL_la_LIBADD = \
 	libEGL_common.la \
-	$(top_builddir)/src/mapi/shared-glapi/libglapi.la
+	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
+	$(top_builddir)/src/mesa/libmesagallium.la \
+	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
+	$(top_builddir)/src/gallium/winsys/sw/null/libws_null.la \
+	$(top_builddir)/src/gallium/drivers/trace/libtrace.la \
+	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
 libEGL_la_LDFLAGS = \
 	-no-undefined \
 	-version-number 1:0 \

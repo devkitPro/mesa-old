@@ -138,6 +138,13 @@ typedef void              *EGLNativeDisplayType;
 typedef khronos_uintptr_t  EGLNativePixmapType;
 typedef khronos_uintptr_t  EGLNativeWindowType;
 
+#elif defined(SWITCH)
+#include <switch.h>
+
+typedef ViDisplay       *EGLNativeDisplayType;
+typedef khronos_uint8_t *EGLNativePixmapType;
+typedef khronos_uint8_t *EGLNativeWindowType;
+
 #else
 #error "Platform not recognized"
 #endif
