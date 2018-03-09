@@ -267,8 +267,6 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
 void
 nouveau_screen_fini(struct nouveau_screen *screen)
 {
-   int fd = screen->drm->fd;
-
    nouveau_mm_destroy(screen->mm_GART);
    nouveau_mm_destroy(screen->mm_VRAM);
 
@@ -279,7 +277,6 @@ nouveau_screen_fini(struct nouveau_screen *screen)
 
    nouveau_device_del(&screen->device);
    nouveau_drm_del(&screen->drm);
-   close(fd);
 
    disk_cache_destroy(screen->disk_shader_cache);
 }

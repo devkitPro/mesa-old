@@ -20,6 +20,12 @@ C_SOURCES := \
 	nouveau_vp3_video.h \
 	nouveau_vp3_video_vp.c \
 	nouveau_winsys.h \
+	nouveau_drm.h \
+	nouveau.h \
+	nouveau.c \
+	private.h \
+	pushbuf.c \
+	libdrm_lists.h \
 	nv17_mpeg.xml.h \
 	nv31_mpeg.xml.h \
 	nv_m2mf.xml.h \

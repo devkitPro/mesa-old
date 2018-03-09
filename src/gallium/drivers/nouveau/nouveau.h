@@ -43,7 +43,11 @@ int nouveau_object_mclass(struct nouveau_object *,
 
 struct nouveau_drm {
 	struct nouveau_object client;
-	int fd;
+	uint32_t nvhostctrlgpu;
+	uint32_t nvhostasgpu;
+	uint32_t nvmap;
+	uint32_t nvhostgpu;
+	uint32_t nvhostctrl;
 	uint32_t version;
 	bool nvif;
 };
@@ -61,9 +65,6 @@ void nouveau_drm_del(struct nouveau_drm **);
 
 struct nouveau_device {
 	struct nouveau_object object;
-	int fd;			/* deprecated */
-	uint32_t lib_version;	/* deprecated */
-	uint32_t drm_version;	/* deprecated */
 	uint32_t chipset;
 	uint64_t vram_size;
 	uint64_t gart_size;
@@ -189,7 +190,6 @@ nouveau_bufctx_mthd(struct nouveau_bufctx *, int bin,  uint32_t packet,
 		    uint32_t vor, uint32_t tor);
 void nouveau_bufctx_reset(struct nouveau_bufctx *, int bin);
 
-struct nouveau_pushbuf_krec;
 struct nouveau_pushbuf {
 	struct nouveau_client *client;
 	struct nouveau_object *channel;

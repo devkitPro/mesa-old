@@ -30,8 +30,12 @@
 #include <assert.h>
 #include <errno.h>
 
+#include "libdrm_lists.h"
 #include "nouveau_drm.h"
 #include "nouveau.h"
+#include "private.h"
+
+#include <switch.h>
 
 struct nouveau_pushbuf_krec {
 	struct nouveau_pushbuf_krec *next;
@@ -52,8 +56,6 @@ struct nouveau_pushbuf_priv {
 	struct nouveau_list bctx_list;
 	struct nouveau_bo *bo;
 	uint32_t type;
-	uint32_t suffix0;
-	uint32_t suffix1;
 	uint32_t *ptr;
 	uint32_t *bgn;
 	int bo_next;
@@ -204,7 +206,7 @@ pushbuf_kref(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 			kref->presumed.domain = NOUVEAU_GEM_DOMAIN_GART;
 
 		cli_kref_set(push->client, bo, kref, push);
-		atomic_inc(&nouveau_bo(bo)->refcnt);
+		p_atomic_inc(&nouveau_bo(bo)->refcnt);
 	}
 
 	return kref;
@@ -305,12 +307,14 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	struct nouveau_device *dev = push->client->device;
 	struct nouveau_drm *drm = nouveau_drm(&dev->object);
 	struct drm_nouveau_gem_pushbuf_bo_presumed *info;
+	struct drm_nouveau_gem_pushbuf_push *kpsh;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
-	struct drm_nouveau_gem_pushbuf req;
+	nvioctl_gpfifo_entry entries[NOUVEAU_GEM_MAX_PUSH];
 	struct nouveau_fifo *fifo = chan->data;
 	struct nouveau_bo *bo;
-	int krec_id = 0;
-	int ret = 0, i;
+	int krec_id = 0, i;
+	nvioctl_fence fence;
+	Result rc;
 
 	if (chan->oclass != NOUVEAU_FIFO_CHANNEL_CLASS)
 		return -EINVAL;
@@ -321,37 +325,23 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	nouveau_pushbuf_data(push, NULL, 0, 0);
 
 	while (krec && krec->nr_push) {
-		req.channel = fifo->channel;
-		req.nr_buffers = krec->nr_buffer;
-		req.buffers = (uint64_t)(unsigned long)krec->buffer;
-		req.nr_relocs = krec->nr_reloc;
-		req.nr_push = krec->nr_push;
-		req.relocs = (uint64_t)(unsigned long)krec->reloc;
-		req.push = (uint64_t)(unsigned long)krec->push;
-		req.suffix0 = nvpb->suffix0;
-		req.suffix1 = nvpb->suffix1;
-		req.vram_available = 0; /* for valgrind */
-		req.gart_available = 0;
+		for (int i = 0; i < krec->nr_push; i++) {
+			kpsh = krec->push + i;
+			kref = krec->buffer + kpsh->bo_index;
+			bo = (void *)(unsigned long)kref->user_priv;
+			armDCacheFlush(bo->map, bo->size);
+			u64 va = (u64)bo->offset + kpsh->offset;
+			entries[i].entry0 = (u32)va;
+			entries[i].entry1 = (u32)(va >> 32) | kpsh->length << 8;
+		}
 
 		if (dbg_on(0))
 			pushbuf_dump(krec, krec_id++, fifo->channel);
 
-#ifndef SIMULATE
-		ret = drmCommandWriteRead(drm->fd, DRM_NOUVEAU_GEM_PUSHBUF,
-					  &req, sizeof(req));
-		nvpb->suffix0 = req.suffix0;
-		nvpb->suffix1 = req.suffix1;
-		dev->vram_limit = (req.vram_available *
-				nouveau_device(dev)->vram_limit_percent) / 100;
-		dev->gart_limit = (req.gart_available *
-				nouveau_device(dev)->gart_limit_percent) / 100;
-#else
-		if (dbg_on(31))
-			ret = -EINVAL;
-#endif
+		rc = nvioctlChannel_SubmitGpfifo(drm->nvhostgpu, entries, krec->nr_push, 2, &fence);
 
-		if (ret) {
-			err("kernel rejected pushbuf: %s\n", strerror(-ret));
+		if (R_FAILED(rc)) {
+			err("kernel rejected pushbuf: %d\n", rc);
 			pushbuf_dump(krec, krec_id++, fifo->channel);
 			break;
 		}
@@ -379,7 +369,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 		krec = krec->next;
 	}
 
-	return ret;
+	return R_FAILED(rc) ? -errno : 0;
 }
 
 static int
@@ -532,33 +522,20 @@ nouveau_pushbuf_new(struct nouveau_client *client, struct nouveau_object *chan,
 	struct nouveau_fifo *fifo = chan->data;
 	struct nouveau_pushbuf_priv *nvpb;
 	struct nouveau_pushbuf *push;
-	struct drm_nouveau_gem_pushbuf req = {};
 	int ret;
+	Result rc;
 
 	if (chan->oclass != NOUVEAU_FIFO_CHANNEL_CLASS)
 		return -EINVAL;
 
-	/* nop pushbuf call, to get the current "return to main" sequence
-	 * we need to append to the pushbuf on early chipsets
-	 */
-	req.channel = fifo->channel;
-	req.nr_push = 0;
-	ret = drmCommandWriteRead(drm->fd, DRM_NOUVEAU_GEM_PUSHBUF,
-				  &req, sizeof(req));
-	if (ret)
-		return ret;
+	rc = nvioctlChannel_AllocGpfifoEx2(drm->nvhostgpu, size, 0x1, 0, 0, 0, 0, NULL);
+	if (!R_FAILED(rc))
+		return -ENOMEM;
 
 	nvpb = calloc(1, sizeof(*nvpb) + nr * sizeof(*nvpb->bos));
 	if (!nvpb)
 		return -ENOMEM;
 
-#ifndef SIMULATE
-	nvpb->suffix0 = req.suffix0;
-	nvpb->suffix1 = req.suffix1;
-#else
-	nvpb->suffix0 = 0xffffffff;
-	nvpb->suffix1 = 0xffffffff;
-#endif
 	nvpb->krec = calloc(1, sizeof(*nvpb->krec));
 	nvpb->list = nvpb->krec;
 	if (!nvpb->krec) {
@@ -685,7 +662,7 @@ nouveau_pushbuf_space(struct nouveau_pushbuf *push,
 		nvpb->ptr = nvpb->bgn;
 		push->cur = nvpb->bgn;
 		push->end = push->cur + (nvpb->bo->size / 4);
-		push->end -= 2 + push->rsvd_kick; /* space for suffix */
+		push->end -= push->rsvd_kick;
 	}
 
 	pushbuf_kref(push, nvpb->bo, push->flags);
@@ -702,11 +679,6 @@ nouveau_pushbuf_data(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	struct drm_nouveau_gem_pushbuf_bo *kref;
 
 	if (bo != nvpb->bo && nvpb->bgn != push->cur) {
-		if (nvpb->suffix0 || nvpb->suffix1) {
-			*push->cur++ = nvpb->suffix0;
-			*push->cur++ = nvpb->suffix1;
-		}
-
 		nouveau_pushbuf_data(push, nvpb->bo,
 				     (nvpb->bgn - nvpb->ptr) * 4,
 				     (push->cur - nvpb->bgn) * 4);
