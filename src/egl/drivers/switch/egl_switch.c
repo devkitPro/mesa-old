@@ -59,10 +59,10 @@
 #include "state_tracker/st_gl_api.h"
 
 #ifdef DEBUG
-#    define CALLED() TRACE(__PRETTY_FUNCTION__)
+#   define CALLED() TRACE(__PRETTY_FUNCTION__)
 #   define TRACE(x) svcOutputDebugString(x, sizeof(x))
 #else
-#    define CALLED()
+#   define CALLED()
 #   define TRACE(x)
 #endif
 
@@ -70,7 +70,6 @@ _EGL_DRIVER_STANDARD_TYPECASTS(switch_egl)
 
 struct switch_egl_display
 {
-    _EGLDisplay base;
     struct st_manager *stmgr;
     struct st_api *stapi;
 };
@@ -432,7 +431,7 @@ switch_st_get_param(struct st_manager *stmgr, enum st_manager_param param)
 static EGLBoolean
 switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 {
-    struct switch_egl_display *display = switch_egl_display(dpy);
+    struct switch_egl_display *display;
     struct st_manager *stmgr;
     CALLED();
 
@@ -501,15 +500,15 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         nvInitialize(nv_servicetype, 0x300000);
     }*/
 
-    TRACE("Creating gl api");
-    display->stmgr = stmgr;
-    display->stapi = st_gl_api_create();
-    if (!display->stapi)
-    {
-        _eglError(EGL_BAD_ALLOC, "st_gl_api_create");
+    display = (struct switch_egl_display*) calloc(1, sizeof (*display));
+    if (!display) {
+        _eglError(EGL_BAD_ALLOC, "switch_initialize");
         return EGL_FALSE;
     }
 
+    display->stmgr = stmgr;
+    display->stapi = st_gl_api_create();
+    dpy->DriverData = display;
     return EGL_TRUE;
 }
 
