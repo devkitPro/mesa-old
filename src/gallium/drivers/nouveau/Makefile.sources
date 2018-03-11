@@ -25,6 +25,7 @@ C_SOURCES := \
 	nouveau.c \
 	private.h \
 	pushbuf.c \
+	bufctx.c \
 	libdrm_lists.h \
 	nv17_mpeg.xml.h \
 	nv31_mpeg.xml.h \

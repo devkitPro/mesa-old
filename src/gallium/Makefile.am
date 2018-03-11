@@ -24,6 +24,15 @@ endif
 ## nouveau
 if HAVE_GALLIUM_NOUVEAU
 SUBDIRS += drivers/nouveau
+
+if HAVE_PLATFORM_SWITCH
+SUBDIRS += winsys/nouveau/switch
+endif
+
+if HAVE_DRICOMMON
+SUBDIRS += winsys/nouveau/drm
+endif
+
 endif
 
 ## vmwgfx/svga

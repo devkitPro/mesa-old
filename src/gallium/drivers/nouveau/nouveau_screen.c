@@ -211,17 +211,23 @@ nouveau_screen_init(struct nouveau_screen *screen, struct nouveau_device *dev)
 
    ret = nouveau_object_new(&dev->object, 0, NOUVEAU_FIFO_CHANNEL_CLASS,
                             data, size, &screen->channel);
-   if (ret)
+   if (ret) {
+      debug_printf("nouveau_object_new: failed with %d\n", ret);
       return ret;
+   }
 
    ret = nouveau_client_new(screen->device, &screen->client);
-   if (ret)
+   if (ret) {
+      debug_printf("nouveau_client_new: failed with %d\n", ret);
       return ret;
+   }
    ret = nouveau_pushbuf_new(screen->client, screen->channel,
                              4, 512 * 1024, 1,
                              &screen->pushbuf);
-   if (ret)
+   if (ret) {
+      debug_printf("nouveau_pushbuf_new: failed with %d\n", ret);
       return ret;
+   }
 
    /* getting CPU time first appears to be more accurate */
    screen->cpu_gpu_time_delta = os_time_get();

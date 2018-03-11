@@ -37,6 +37,14 @@
 
 #include <switch.h>
 
+#ifdef DEBUG
+#   define CALLED() TRACE(__PRETTY_FUNCTION__)
+#   define TRACE(x) svcOutputDebugString(x, sizeof(x))
+#else
+#   define CALLED()
+#   define TRACE(x)
+#endif
+
 struct nouveau_pushbuf_krec {
 	struct nouveau_pushbuf_krec *next;
 	struct drm_nouveau_gem_pushbuf_bo buffer[NOUVEAU_GEM_MAX_BUFFERS];
@@ -82,6 +90,7 @@ pushbuf_kref_fits(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	struct nouveau_bo *kbo;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
 	int i;
+	CALLED();
 
 	/* VRAM is the only valid domain.  GART and VRAM|GART buffers
 	 * are all accounted to GART, so if this doesn't fit in VRAM
@@ -150,6 +159,7 @@ pushbuf_kref(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	struct nouveau_pushbuf *fpush;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
 	uint32_t domains, domains_wr, domains_rd;
+	CALLED();
 
 	domains = 0;
 	if (flags & NOUVEAU_BO_VRAM)
@@ -222,6 +232,7 @@ pushbuf_krel(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	struct drm_nouveau_gem_pushbuf_bo *pkref;
 	struct drm_nouveau_gem_pushbuf_bo *bkref;
 	uint32_t reloc = data;
+	CALLED();
 
 	pkref = cli_kref_get(push->client, nvpb->bo);
 	bkref = cli_kref_get(push->client, bo);
@@ -265,6 +276,7 @@ pushbuf_dump(struct nouveau_pushbuf_krec *krec, int krec_id, int chid)
 	struct nouveau_bo *bo;
 	uint32_t *bgn, *end;
 	int i;
+	CALLED();
 
 	err("ch%d: krec %d pushes %d bufs %d relocs %d\n", chid,
 	    krec_id, krec->nr_push, krec->nr_buffer, krec->nr_reloc);
@@ -305,7 +317,6 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
 	struct nouveau_pushbuf_krec *krec = nvpb->list;
 	struct nouveau_device *dev = push->client->device;
-	struct nouveau_drm *drm = nouveau_drm(&dev->object);
 	struct drm_nouveau_gem_pushbuf_bo_presumed *info;
 	struct drm_nouveau_gem_pushbuf_push *kpsh;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
@@ -315,6 +326,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	int krec_id = 0, i;
 	nvioctl_fence fence;
 	Result rc;
+	CALLED();
 
 	if (chan->oclass != NOUVEAU_FIFO_CHANNEL_CLASS)
 		return -EINVAL;
@@ -338,7 +350,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 		if (dbg_on(0))
 			pushbuf_dump(krec, krec_id++, fifo->channel);
 
-		rc = nvioctlChannel_SubmitGpfifo(drm->nvhostgpu, entries, krec->nr_push, 2, &fence);
+		rc = nvioctlChannel_SubmitGpfifo(fifo->channel, entries, krec->nr_push, 2, &fence);
 
 		if (R_FAILED(rc)) {
 			err("kernel rejected pushbuf: %d\n", rc);
@@ -381,6 +393,7 @@ pushbuf_flush(struct nouveau_pushbuf *push)
 	struct nouveau_bufctx *bctx, *btmp;
 	struct nouveau_bo *bo;
 	int ret = 0, i;
+	CALLED();
 
 	if (push->channel) {
 		ret = pushbuf_submit(push, push->channel);
@@ -420,6 +433,7 @@ pushbuf_refn_fail(struct nouveau_pushbuf *push, int sref, int srel)
 	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
 	struct nouveau_pushbuf_krec *krec = nvpb->krec;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
+	CALLED();
 
 	kref = krec->buffer + sref;
 	while (krec->nr_buffer-- > sref) {
@@ -441,6 +455,7 @@ pushbuf_refn(struct nouveau_pushbuf *push, bool retry,
 	struct drm_nouveau_gem_pushbuf_bo *kref;
 	int sref = krec->nr_buffer;
 	int ret = 0, i;
+	CALLED();
 
 	for (i = 0; i < nr; i++) {
 		kref = pushbuf_kref(push, refs[i].bo, refs[i].flags);
@@ -472,6 +487,7 @@ pushbuf_validate(struct nouveau_pushbuf *push, bool retry)
 	struct nouveau_bufref *bref;
 	int relocs = bctx ? bctx->relocs * 2: 0;
 	int sref, srel, ret;
+	CALLED();
 
 	ret = nouveau_pushbuf_space(push, relocs, relocs, 0);
 	if (ret || bctx == NULL)
@@ -518,19 +534,21 @@ nouveau_pushbuf_new(struct nouveau_client *client, struct nouveau_object *chan,
 		    int nr, uint32_t size, bool immediate,
 		    struct nouveau_pushbuf **ppush)
 {
-	struct nouveau_drm *drm = nouveau_drm(&client->device->object);
 	struct nouveau_fifo *fifo = chan->data;
 	struct nouveau_pushbuf_priv *nvpb;
 	struct nouveau_pushbuf *push;
 	int ret;
 	Result rc;
+	CALLED();
 
 	if (chan->oclass != NOUVEAU_FIFO_CHANNEL_CLASS)
 		return -EINVAL;
 
-	rc = nvioctlChannel_AllocGpfifoEx2(drm->nvhostgpu, size, 0x1, 0, 0, 0, 0, NULL);
-	if (!R_FAILED(rc))
+	rc = nvioctlChannel_AllocGpfifoEx2(fifo->channel, size, 0x1, 0, 0, 0, 0, NULL);
+	if (R_FAILED(rc)) {
+		TRACE("Failed to allocate GPFIFO!");
 		return -ENOMEM;
+	}
 
 	nvpb = calloc(1, sizeof(*nvpb) + nr * sizeof(*nvpb->bos));
 	if (!nvpb)
@@ -561,6 +579,7 @@ nouveau_pushbuf_new(struct nouveau_client *client, struct nouveau_object *chan,
 		ret = nouveau_bo_new(client->device, nvpb->type, 0, size,
 				     NULL, &nvpb->bos[nvpb->bo_nr]);
 		if (ret) {
+			TRACE("Failed to create pushbuf bo!");
 			nouveau_pushbuf_del(&push);
 			return ret;
 		}
@@ -575,6 +594,7 @@ void
 nouveau_pushbuf_del(struct nouveau_pushbuf **ppush)
 {
 	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(*ppush);
+	CALLED();
 	if (nvpb) {
 		struct drm_nouveau_gem_pushbuf_bo *kref;
 		struct nouveau_pushbuf_krec *krec;
@@ -601,6 +621,7 @@ struct nouveau_bufctx *
 nouveau_pushbuf_bufctx(struct nouveau_pushbuf *push, struct nouveau_bufctx *ctx)
 {
 	struct nouveau_bufctx *prev = push->bufctx;
+	CALLED();
 	push->bufctx = ctx;
 	return prev;
 }
@@ -615,6 +636,7 @@ nouveau_pushbuf_space(struct nouveau_pushbuf *push,
 	struct nouveau_bo *bo = NULL;
 	bool flushed = false;
 	int ret = 0;
+	CALLED();
 
 	/* switch to next buffer if insufficient space in the current one */
 	if (push->cur + dwords >= push->end) {
@@ -677,6 +699,7 @@ nouveau_pushbuf_data(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	struct nouveau_pushbuf_krec *krec = nvpb->krec;
 	struct drm_nouveau_gem_pushbuf_push *kpsh;
 	struct drm_nouveau_gem_pushbuf_bo *kref;
+	CALLED();
 
 	if (bo != nvpb->bo && nvpb->bgn != push->cur) {
 		nouveau_pushbuf_data(push, nvpb->bo,
@@ -699,6 +722,7 @@ int
 nouveau_pushbuf_refn(struct nouveau_pushbuf *push,
 		     struct nouveau_pushbuf_refn *refs, int nr)
 {
+	CALLED();
 	return pushbuf_refn(push, true, refs, nr);
 }
 
@@ -706,6 +730,7 @@ void
 nouveau_pushbuf_reloc(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 		      uint32_t data, uint32_t flags, uint32_t vor, uint32_t tor)
 {
+	CALLED();
 	*push->cur = pushbuf_krel(push, bo, data, flags, vor, tor);
 	push->cur++;
 }
@@ -713,6 +738,7 @@ nouveau_pushbuf_reloc(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 int
 nouveau_pushbuf_validate(struct nouveau_pushbuf *push)
 {
+	CALLED();
 	return pushbuf_validate(push, true);
 }
 
@@ -721,6 +747,7 @@ nouveau_pushbuf_refd(struct nouveau_pushbuf *push, struct nouveau_bo *bo)
 {
 	struct drm_nouveau_gem_pushbuf_bo *kref;
 	uint32_t flags = 0;
+	CALLED();
 
 	if (cli_push_get(push->client, bo) == push) {
 		kref = cli_kref_get(push->client, bo);
@@ -737,6 +764,7 @@ nouveau_pushbuf_refd(struct nouveau_pushbuf *push, struct nouveau_bo *bo)
 int
 nouveau_pushbuf_kick(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 {
+	CALLED();
 	if (!push->channel)
 		return pushbuf_submit(push, chan);
 	pushbuf_flush(push);

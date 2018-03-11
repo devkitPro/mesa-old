@@ -60,7 +60,7 @@ nouveau_drm(struct nouveau_object *obj)
 	return (struct nouveau_drm *)obj;
 }
 
-int nouveau_drm_new(int fd, struct nouveau_drm **);
+int nouveau_drm_new(uint32_t nvhostctrl, struct nouveau_drm **);
 void nouveau_drm_del(struct nouveau_drm **);
 
 struct nouveau_device {

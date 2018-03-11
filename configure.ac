@@ -3142,6 +3142,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/winsys/freedreno/drm/Makefile
                  src/gallium/winsys/i915/drm/Makefile
                  src/gallium/winsys/nouveau/drm/Makefile
+                 src/gallium/winsys/nouveau/switch/Makefile
                  src/gallium/winsys/pl111/drm/Makefile
                  src/gallium/winsys/radeon/drm/Makefile
                  src/gallium/winsys/amdgpu/drm/Makefile

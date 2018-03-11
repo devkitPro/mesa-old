@@ -1,0 +1,3 @@
+C_SOURCES := \
+	nouveau_switch_public.h \
+	nouveau_switch_winsys.c
