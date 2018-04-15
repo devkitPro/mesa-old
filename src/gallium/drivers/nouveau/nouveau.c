@@ -47,13 +47,15 @@
 
 #include <switch.h>
 
+
 #ifdef DEBUG
-#   define CALLED() TRACE(__PRETTY_FUNCTION__)
-#   define TRACE(x) svcOutputDebugString(x, sizeof(x))
+#	define TRACE(x...) printf("nouveau: " x)
+#	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
 #else
-#   define CALLED()
-#   define TRACE(x)
+#	define TRACE(x...)
+# define CALLED()
 #endif
+#define ERROR(x...) printf("nouveau: " x)
 
 /* Unused
 int
@@ -332,7 +334,12 @@ nouveau_client_del(struct nouveau_client **pclient)
 static void
 nouveau_bo_del(struct nouveau_bo *bo)
 {
-	// TODO: Unimplemented
+	CALLED();
+
+	if (bo->map) {
+			free(bo->map);
+			bo->map = NULL;
+	}
 }
 
 int
@@ -371,7 +378,7 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	}
 
 	// TODO: Should probably specify some flags here
-	rc = nvioctlNvhostAsGpu_MapBufferEx(drm->nvhostasgpu, 0, -1, bo->handle, 0, 0, bo->size, 0, &bo->offset);
+	rc = nvioctlNvhostAsGpu_MapBufferEx(drm->nvhostasgpu, 0, -1, bo->handle, 0, 0, bo->size, 0, &nvbo->map_handle);
 	if (R_FAILED(rc)) {
 		TRACE("Failed to map bo");
 		goto cleanup;

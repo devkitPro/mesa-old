@@ -101,8 +101,6 @@ os_log_message(const char *message)
       fputs(message, fout);
       fflush(fout);
    }
-#elif defined(PIPE_OS_SWITCH)
-   svcOutputDebugString(message, strlen(message) + 1);
 #else /* !PIPE_SUBSYSTEM_WINDOWS */
    fflush(stdout);
    fputs(message, fout);

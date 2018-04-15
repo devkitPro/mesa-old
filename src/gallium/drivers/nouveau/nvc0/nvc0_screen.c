@@ -972,7 +972,7 @@ nvc0_screen_create(struct nouveau_device *dev)
       FAIL_SCREEN_INIT("Error creating SW object: %d\n", ret);
 
    BEGIN_NVC0(push, SUBC_SW(NV01_SUBCHAN_OBJECT), 1);
-   PUSH_DATA (push, screen->nvsw->handle);*/
+   PUSH_DATA (push, screen->nvsw->handle);
 
    switch (dev->chipset & ~0xf) {
    case 0x130:
@@ -992,7 +992,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    ret = nouveau_object_new(chan, 0xbeef323f, obj_class, NULL, 0,
                             &screen->m2mf);
    if (ret)
-      FAIL_SCREEN_INIT("Error allocating PGRAPH context for M2MF: %d\n", ret);
+      FAIL_SCREEN_INIT("Error allocating PGRAPH context for M2MF: %d\n", ret);*/
 
    BEGIN_NVC0(push, SUBC_M2MF(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->m2mf->oclass);

@@ -60,13 +60,15 @@
 #include "state_tracker/st_gl_api.h"
 #include "state_tracker/drm_driver.h"
 
+
 #ifdef DEBUG
-#   define CALLED() TRACE(__PRETTY_FUNCTION__)
-#   define TRACE(x) svcOutputDebugString(x, sizeof(x))
+#	define TRACE(x...) printf("egl_switch: " x)
+#	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
 #else
-#   define CALLED()
-#   define TRACE(x)
+#	define TRACE(x...)
+# define CALLED()
 #endif
+#define ERROR(x...) printf("egl_switch: " x)
 
 #define NUM_SWAP_BUFFERS 2
 
@@ -123,7 +125,7 @@ extern u32 __nx_applet_type;
 static BqQueueBufferInput QueueBufferData = {
     .timestamp = 0x0,
     .isAutoTimestamp = 0x1,
-    .crop = {0x0, 0x0, 0x0, 0x0}, //Official apps which use multiple resolutions configure this for the currently used resolution, depending on the current appletOperationMode.
+    .crop = {0, 0, 1280, 720}, //Official apps which use multiple resolutions configure this for the currently used resolution, depending on the current appletOperationMode.
     .scalingMode = 0x0,
     .transform = NATIVE_WINDOW_TRANSFORM_FLIP_V,
     .stickyTransform = 0x0,
@@ -237,7 +239,7 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
     map = pipe->transfer_map(pipe, res, 0, PIPE_TRANSFER_READ, &box,
                             &transfer);
     dst = nvpipe->transfer_map(nvpipe, surface->buffers[surface->CurrentProducerBuffer],
-                              0, PIPE_TRANSFER_WRITE, &box, &nvtransfer);
+                              0, PIPE_TRANSFER_WRITE | PIPE_TRANSFER_UNSYNCHRONIZED | PIPE_TRANSFER_MAP_DIRECTLY, &box, &nvtransfer);
 
     /*
     * Copy the color buffer from the resource to the user's buffer.
@@ -249,6 +251,7 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
 
     for (y = 0; y < res->height0; y++) {
       memcpy(dst, src, bytes);
+      armDCacheFlush(dst, bytes);
       dst += dst_stride;
       src += transfer->stride;
     }
@@ -447,7 +450,13 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
 
         rc = bqGraphicBufferInit(i, &BufferInitData);
         if (R_FAILED(rc)) {
-            TRACE("Failed to get vsync event");
+            TRACE("Failed to initialize buffer");
+            return EGL_FALSE;
+        }
+
+        rc = bqRequestBuffer(i, NULL);
+        if (R_FAILED(rc)) {
+            TRACE("Failed to request buffer");
             return EGL_FALSE;
         }
     }
@@ -565,7 +574,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 {
     struct switch_egl_display *display;
     struct st_manager *stmgr;
-    nvServiceType nv_servicetype;
     Result rc;
     CALLED();
 
@@ -592,47 +600,32 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     stmgr->get_param = switch_st_get_param;
 
-    switch(__nx_applet_type)
-    {
-        case AppletType_Application:
-        case AppletType_SystemApplication:
-            nv_servicetype = NVSERVTYPE_Application;
-            break;
-
-        case AppletType_SystemApplet:
-        case AppletType_LibraryApplet:
-        case AppletType_OverlayApplet:
-        default:
-            nv_servicetype = NVSERVTYPE_Applet;
-            break;
-    }
-
-    TRACE("Initializing nv service");
-    rc = nvInitialize(nv_servicetype, 0x300000);
+    TRACE("Initializing nv service\n");
+    rc = nvInitialize();
     if (R_FAILED(rc)) {
-        TRACE("Failed to initialize nv service");
+        TRACE("Failed to initialize nv service\n");
         return EGL_FALSE;
     }
 
-    TRACE("Opening /dev/nvhost-ctrl");
+    TRACE("Opening /dev/nvhost-ctrl\n");
     rc = nvOpen(&display->nvhostctrl, "/dev/nvhost-ctrl");
     if (R_FAILED(rc)) {
-        TRACE("Failed to open /dev/nvhost-ctrl");
+        TRACE("Failed to open /dev/nvhost-ctrl\n");
         return EGL_FALSE;
     }
 
-    TRACE("Creating nouvea screen");
+    TRACE("Creating nouvea screen\n");
     display->nvscreen = nouveau_switch_screen_create(display->nvhostctrl);
     if (!display->nvscreen)
     {
-        TRACE("Failed to create nouvea screen");
+        TRACE("Failed to create nouvea screen\n");
         return EGL_FALSE;
     }
-    TRACE("Creating nouvea context");
+    TRACE("Creating nouvea context\n");
     display->nvctx = display->nvscreen->context_create(display->nvscreen, display, 0);
     if (!display->nvctx)
     {
-        TRACE("Failed to create nouvea context");
+        TRACE("Failed to create nouvea context\n");
         return EGL_FALSE;
     }
 
@@ -643,13 +636,13 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         /* We use a null software winsys since we always just render to ordinary
         * driver resources.
         */
-        TRACE("Initializing winsys");
+        TRACE("Initializing winsys\n");
         winsys = null_sw_create();
         if (!winsys)
             return EGL_FALSE;
 
         /* Create llvmpipe or softpipe screen */
-        TRACE("Creating screen");
+        TRACE("Creating screen\n");
         screen = sw_screen_create(winsys);
         if (!screen)
         {
@@ -659,7 +652,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         }
 
         /* Inject optional trace, debug, etc. wrappers */
-        TRACE("Wrapping screen");
+        TRACE("Wrapping screen\n");
         stmgr->screen = debug_screen_wrap(screen);
     }
     /*else
@@ -668,7 +661,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     viGetDisplayVsyncEvent((ViDisplay*)dpy->PlatformDisplay, &display->VSyncEvent);
     if (R_FAILED(rc)) {
-        TRACE("Failed to get vsync event");
+        TRACE("Failed to get vsync event\n");
         return EGL_FALSE;
     }
 

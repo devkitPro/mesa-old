@@ -92,8 +92,6 @@ _eglDefaultLogger(EGLint level, const char *msg)
       [_EGL_DEBUG] = ANDROID_LOG_DEBUG,
    };
    LOG_PRI(egl2alog[level], LOG_TAG, "%s", msg);
-#elif defined(HAVE_SWITCH_PLATFORM)
-   svcOutputDebugString(msg, strlen(msg) + 1);
 #else
    fprintf(stderr, "libEGL %s: %s\n", level_strings[level], msg);
 #endif /* HAVE_ANDROID_PLATFORM */
