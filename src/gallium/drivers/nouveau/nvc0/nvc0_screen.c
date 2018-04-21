@@ -898,6 +898,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    uint32_t flags;
    int ret;
    unsigned i;
+   debug_printf("nvc0_screen_create: CALLED\n");
 
    switch (dev->chipset & ~0xf) {
    case 0xc0:
@@ -922,6 +923,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    ret = nouveau_screen_init(&screen->base, dev);
    if (ret)
       FAIL_SCREEN_INIT("Base screen init failed: %d\n", ret);
+
    chan = screen->base.channel;
    push = screen->base.pushbuf;
    push->user_priv = screen;
@@ -965,8 +967,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->base.fence.emit = nvc0_screen_fence_emit;
    screen->base.fence.update = nvc0_screen_fence_update;
 
-
-   /*ret = nouveau_object_new(chan, (dev->chipset < 0xe0) ? 0x1f906e : 0x906e,
+   ret = nouveau_object_new(chan, (dev->chipset < 0xe0) ? 0x1f906e : 0x906e,
                             NVIF_CLASS_SW_GF100, NULL, 0, &screen->nvsw);
    if (ret)
       FAIL_SCREEN_INIT("Error creating SW object: %d\n", ret);
@@ -992,7 +993,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    ret = nouveau_object_new(chan, 0xbeef323f, obj_class, NULL, 0,
                             &screen->m2mf);
    if (ret)
-      FAIL_SCREEN_INIT("Error allocating PGRAPH context for M2MF: %d\n", ret);*/
+      FAIL_SCREEN_INIT("Error allocating PGRAPH context for M2MF: %d\n", ret);
 
    BEGIN_NVC0(push, SUBC_M2MF(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->m2mf->oclass);
@@ -1379,8 +1380,9 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->default_tsc = CALLOC_STRUCT(nv50_tsc_entry);
    screen->default_tsc->tsc[0] = G80_TSC_0_SRGB_CONVERSION;
 
-   nouveau_fence_new(&screen->base, &screen->base.fence.current);
+   //nouveau_fence_new(&screen->base, &screen->base.fence.current); // TODO: Fencing
 
+   debug_printf("nvc0_screen_create: DONE\n");
    return &screen->base;
 
 fail:

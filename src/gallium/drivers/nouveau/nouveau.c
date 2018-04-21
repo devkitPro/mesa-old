@@ -34,6 +34,7 @@
 #include <malloc.h>
 
 #include "libdrm_lists.h"
+#include "nouveau_debug.h"
 #include "nouveau_drm.h"
 #include "nouveau.h"
 #include "private.h"
@@ -49,13 +50,13 @@
 
 
 #ifdef DEBUG
-#	define TRACE(x...) printf("nouveau: " x)
+#	define TRACE(x...) NOUVEAU_DBG(MISC, "nouveau: " x)
 #	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
 #else
 #	define TRACE(x...)
 # define CALLED()
 #endif
-#define ERROR(x...) printf("nouveau: " x)
+#define ERROR(x...) NOUVEAU_ERR("nouveau: " x)
 
 /* Unused
 int
@@ -107,14 +108,16 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 
 	if (oclass == NOUVEAU_FIFO_CHANNEL_CLASS) {
 		struct nouveau_fifo *fifo;
-		if (!(fifo = calloc(1, sizeof(*fifo))))
+		if (!(fifo = calloc(1, sizeof(*fifo)))) {
+			free(obj);
 			return -ENOMEM;
+		}
 		fifo->channel = drm->nvhostgpu;
 		fifo->pushbuf = NOUVEAU_GEM_DOMAIN_VRAM;
 		obj->data = fifo;
 		obj->length = sizeof(*fifo);
-	} else {
-		rc = nvioctlChannel_AllocObjCtx(drm->nvhostgpu, oclass, 0, &obj->handle);
+	} else if (oclass == MAXWELL_B) {
+		rc = nvioctlChannel_AllocObjCtx(drm->nvhostgpu, oclass, 0);
 		if (R_FAILED(rc)) {
 			free(obj);
 			return -errno;
@@ -144,7 +147,7 @@ nouveau_drm_del(struct nouveau_drm **pdrm)
 {
 	struct nouveau_drm *drm = *pdrm;
 	CALLED();
-	nvClose(drm->nvhostctrl);
+	//nvClose(drm->nvhostctrl);
 	nvClose(drm->nvhostgpu);
 	nvClose(drm->nvmap);
 	nvClose(drm->nvhostasgpu);
@@ -189,7 +192,7 @@ nouveau_device_new(struct nouveau_object *parent, int32_t oclass,
 {
 	struct nouveau_drm *drm = nouveau_drm(parent);
 	struct nouveau_device_priv *nvdev;
-	nvioctl_gpu_characteristics gpu_chars;
+	gpu_characteristics gpu_chars;
 	char *tmp;
 	Result rc;
 	CALLED();
