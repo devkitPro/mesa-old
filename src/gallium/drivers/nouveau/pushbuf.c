@@ -90,7 +90,7 @@ pushbuf_kref_fits(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 	CALLED();
 
 	// Unimplemented
-	return false;
+	return true;
 }
 
 static struct drm_nouveau_gem_pushbuf_bo *
