@@ -194,12 +194,12 @@ switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
     CALLED();
     // TODO: Create the visual from the config
     struct st_visual stvis = {
-        ST_ATTACHMENT_FRONT_LEFT_MASK,
+        ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT,
         PIPE_FORMAT_RGBA8888_UNORM,
         PIPE_FORMAT_NONE,
         PIPE_FORMAT_NONE,
         1,
-        ST_ATTACHMENT_FRONT_LEFT
+        ST_ATTACHMENT_BACK_LEFT
     };
     *visual = stvis;
 }
@@ -220,6 +220,7 @@ static boolean
 switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    enum st_attachment_type statt)
 {
+#if 0
     struct switch_egl_display *display = stfbi_to_display(stfbi);
     struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
     struct pipe_context *pipe = stctx->pipe;
@@ -258,7 +259,7 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
 
     nvpipe->transfer_unmap(nvpipe, nvtransfer);
     pipe->transfer_unmap(pipe, transfer);
-
+#endif
     return TRUE;
 }
 
@@ -280,7 +281,6 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
 {
     struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
     struct pipe_screen *screen = stfbi->state_manager->screen;
-    enum st_attachment_type i;
     struct pipe_resource templat;
     u32 width = 1280, height = 720; // TODO: Get the resolution through viGetDisplayResolution().
     CALLED();
@@ -297,36 +297,34 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
     templat.bind = 0; /* setup below */
     templat.flags = 0;
 
-    for (i = 0; i < count; i++)
+    for (unsigned i = 0; i < count; i++)
     {
-        enum pipe_format format = PIPE_FORMAT_NONE;
-        unsigned bind = 0;
-
         /*
         * At this time, we really only need to handle the front-left color
         * attachment, since that's all we specified for the visual in
         * osmesa_init_st_visual().
         */
-        if (statts[i] == ST_ATTACHMENT_FRONT_LEFT)
+        if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
         {
-            format = surface->stvis.color_format;
-            bind = PIPE_BIND_RENDER_TARGET;
+            s32 index = surface->CurrentProducerBuffer;
+            if (statts[i] == ST_ATTACHMENT_FRONT_LEFT)
+                index = (index + 1) % NUM_SWAP_BUFFERS;
+            out[i] = surface->textures[statts[i]] = surface->buffers[index];
         }
         else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
         {
-            format = surface->stvis.depth_stencil_format;
-            bind = PIPE_BIND_DEPTH_STENCIL;
+            templat.format = surface->stvis.depth_stencil_format;
+            templat.bind = PIPE_BIND_DEPTH_STENCIL;
+            pipe_resource_reference(&out[i], NULL);
+            out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
         }
         else if (statts[i] == ST_ATTACHMENT_ACCUM)
         {
-            format = surface->stvis.accum_format;
-            bind = PIPE_BIND_RENDER_TARGET;
+            templat.format = surface->stvis.accum_format;
+            templat.bind = PIPE_BIND_RENDER_TARGET;
+            pipe_resource_reference(&out[i], NULL);
+            out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
         }
-
-        templat.format = format;
-        templat.bind = bind;
-        pipe_resource_reference(&out[i], NULL);
-        out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
     }
 
     return TRUE;
@@ -596,9 +594,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     Result rc;
     CALLED();
 
-    if (dpy->Options.ForceSoftware)
-        return EGL_FALSE;
-
     if (!switch_add_configs_for_visuals(dpy))
         return EGL_FALSE;
 
@@ -665,6 +660,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         return EGL_FALSE;
     }
 
+    if (dpy->Options.ForceSoftware)
     {
         struct sw_winsys *winsys;
         struct pipe_screen *screen;
@@ -691,9 +687,12 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         TRACE("Wrapping screen\n");
         stmgr->screen = debug_screen_wrap(screen);
     }
-    /*else
+    else
     {
-    }*/
+        /* Inject optional trace, debug, etc. wrappers */
+        TRACE("Wrapping screen\n");
+        stmgr->screen = debug_screen_wrap(display->nvscreen);
+    }
 
     viGetDisplayVsyncEvent((ViDisplay*)dpy->PlatformDisplay, &display->VsyncEvent);
     if (R_FAILED(rc)) {
@@ -864,6 +863,8 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
         TRACE("Failed to wait for fence\n");
         return EGL_FALSE;
     }
+
+    p_atomic_inc(&surface->stfbi->stamp);
 
     TRACE("Requesting buffer %d\n", surface->CurrentProducerBuffer);
     //if (R_SUCCEEDED(rc)) g_gfxCurrentBuffer = (g_gfxCurrentBuffer + 1) & (g_nvgfx_totalframebufs-1);
