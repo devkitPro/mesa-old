@@ -112,6 +112,7 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 			free(obj);
 			return -ENOMEM;
 		}
+		fifo->object = parent;
 		fifo->channel = drm->nvhostgpu;
 		fifo->pushbuf = NOUVEAU_GEM_DOMAIN_VRAM;
 		obj->data = fifo;
@@ -362,7 +363,7 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	bo->device = dev;
 	bo->flags = flags;
 	bo->size = size;
-  bo->map = memalign(0x1000, size);
+	bo->map = memalign(0x1000, size);
 	if (!bo->map)
 		goto cleanup;
 	memset(bo->map, 0, size);

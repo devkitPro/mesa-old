@@ -114,18 +114,74 @@ pushbuf_krel(struct nouveau_pushbuf *push, struct nouveau_bo *bo,
 }
 
 static void
-pushbuf_dump(struct nouveau_pushbuf_krec *krec, int krec_id, int chid)
+pushbuf_dump(uint32_t *start, uint32_t *end)
 {
 	CALLED();
-	// Unimplemented
+	for (uint32_t cmd = 0; start < end; start++)
+	{
+		cmd = *start;
+		NOUVEAU_DBG(MISC, "0x%08x\n", cmd);
+	}
+}
+
+static Result
+nvEventWait(u32 fd, u32 syncpt_id, u32 threshold, s32 timeout) {
+    Result rc=0;
+    u32 result;
+
+    do {
+        rc = nvioctlNvhostCtrl_EventWait(fd, syncpt_id, threshold, timeout, 0, &result);
+    } while(rc==5);//timeout error
+
+    return rc;
 }
 
 static int
 pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 {
 	CALLED();
+	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
+	struct nouveau_bo_priv *nvbo = nouveau_bo(nvpb->bo);
+	struct nouveau_fifo *fifo = chan->data;
+	struct nouveau_drm *drm = nouveau_drm(fifo->object);
+	nvioctl_gpfifo_entry entry;
+	nvioctl_fence fence;
+	Result rc;
 
-	// Unimplemented
+	// Calculate the offset of the command start
+	u64 offset = (u64)nvpb->bgn - (u64)nvpb->ptr;
+	u64 length = (u64)push->cur - (u64)nvpb->bgn;
+	u64 va = ((u64)nvbo->map_handle + offset) | (length << 42);
+	entry.entry0 = (u32)va;
+	entry.entry1 = (u32)(va >> 32);
+	err("offset: %ld length: %ld words: %ld va: %lx\n", offset, length, length / 4, va);
+
+	rc = nvioctlChannel_SubmitGpfifo(fifo->channel, &entry, 1, 0x104, &fence);
+	if (R_FAILED(rc)) {
+		err("kernel rejected pushbuf: %d\n", rc);
+		pushbuf_dump(nvpb->bgn, push->cur);
+		return -errno;
+	}
+	pushbuf_dump(nvpb->bgn, push->cur);
+
+	// Set the start for the next command buffer
+	nvpb->bgn = push->cur;
+	//push->cur = nvpb->bgn;
+
+	TRACE("Waiting for fence\n");
+	// Only run nvEventWait when the fence is valid and the id is not NO_FENCE.
+	if (fence.id!=0xffffffff)
+	{
+		rc = nvEventWait(drm->nvhostctrl, fence.id, fence.value, -1);
+		if (R_FAILED(rc)) {
+			TRACE("Failed to wait for fence\n");
+			return -1;
+		}
+	}
+	else
+	{
+		TRACE("Invalid fence!\n");
+	}
 	return 0;
 }
 
@@ -133,9 +189,7 @@ static int
 pushbuf_flush(struct nouveau_pushbuf *push)
 {
 	CALLED();
-
-	// Unimplemented
-	return 0;
+	return pushbuf_submit(push, push->channel);
 }
 
 static void
@@ -172,21 +226,53 @@ nouveau_pushbuf_new(struct nouveau_client *client, struct nouveau_object *chan,
 {
 	CALLED();
 	struct nouveau_fifo *fifo = chan->data;
+	struct nouveau_drm *drm = nouveau_drm(fifo->object);
 	struct nouveau_pushbuf_priv *nvpb;
+	struct nouveau_pushbuf *push;
+	nvioctl_fence fence;
 	Result rc;
+	int ret;
 
-	rc = nvioctlChannel_AllocGpfifoEx2(fifo->channel, 0x800, 0x1, 0, 0, 0, 0, NULL); // TODO: Fencing
+	rc = nvioctlChannel_AllocGpfifoEx2(fifo->channel, 0x800, 0x1, 0, 0, 0, 0, &fence);
 	if (R_FAILED(rc)) {
 		TRACE("Failed to allocate GPFIFO!\n");
 		return -ENOMEM;
 	}
 
-	// Dummy
-	nvpb = calloc(1, sizeof(*nvpb) + nr * sizeof(*nvpb->bos));
-	nvpb->ptr = (uint32_t*)calloc(1, size);
-	nvpb->base.cur = nvpb->ptr;
-	nvpb->base.end = nvpb->base.cur + size;
-	*ppush = &nvpb->base;
+	// Only run nvEventWait when the fence is valid and the id is not NO_FENCE.
+	if (fence.id!=0xffffffff)
+	{
+		rc = nvEventWait(drm->nvhostctrl, fence.id, fence.value, -1);
+		if (R_FAILED(rc)) {
+			TRACE("Failed to wait for fence\n");
+			return -1;
+		}
+	}
+	else
+	{
+		TRACE("Invalid fence!\n");
+	}
+
+	nvpb = calloc(1, sizeof(*nvpb)); // + nr * sizeof(*nvpb->bos));
+	if (!nvpb)
+		return -ENOMEM;
+
+	push = &nvpb->base;
+	ret = nouveau_bo_new(client->device, NOUVEAU_BO_MAP, 0, size,
+						NULL, &nvpb->bo);
+	if (ret) {
+		TRACE("Failed to create pushbuf bo!\n");
+		nouveau_pushbuf_del(&push);
+		return ret;
+	}
+
+	svcSetMemoryAttribute(nvpb->bo->map, nvpb->bo->size, 8, 8);
+	push->channel = chan;
+	nvpb->bgn = nvpb->bo->map;
+	nvpb->ptr = nvpb->bgn;
+	push->cur = nvpb->ptr;
+	push->end = nvpb->ptr + (nvpb->bo->size / 4);
+	*ppush = push;
 
 	return 0;
 }
@@ -197,7 +283,7 @@ nouveau_pushbuf_del(struct nouveau_pushbuf **ppush)
 	CALLED();
 	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(*ppush);
 
-	free(nvpb->ptr);
+	nouveau_bo_ref(NULL, &nvpb->bo);
 	free(nvpb);
 	*ppush = NULL;
 }
@@ -267,7 +353,8 @@ int
 nouveau_pushbuf_kick(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 {
 	CALLED();
-
-	// Unimplemented
-	return 0;
+	if (!push->channel)
+		return pushbuf_submit(push, chan);
+	pushbuf_flush(push);
+	return pushbuf_validate(push, false);
 }

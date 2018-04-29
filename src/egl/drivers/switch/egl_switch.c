@@ -262,8 +262,8 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
     return TRUE;
 }
 
-static boolean
-nouveauEventWait(u32 fd, u32 syncpt_id, u32 threshold, s32 timeout) {
+static Result
+nvEventWait(u32 fd, u32 syncpt_id, u32 threshold, s32 timeout) {
     Result rc=0;
     u32 result;
 
@@ -271,7 +271,7 @@ nouveauEventWait(u32 fd, u32 syncpt_id, u32 threshold, s32 timeout) {
         rc = nvioctlNvhostCtrl_EventWait(fd, syncpt_id, threshold, timeout, 0, &result);
     } while(rc==5);//timeout error
 
-    return R_SUCCEEDED(rc) ? true : false;
+    return rc;
 }
 
 static boolean
@@ -858,12 +858,12 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
     }
 
     TRACE("Swapping in buffer %d\n", surface->CurrentProducerBuffer);
-    // Only run nouveauEventWait when the fence is valid and the id is not NO_FENCE.
+    // Only run nvEventWait when the fence is valid and the id is not NO_FENCE.
     if (fence->is_valid && fence->nv_fences[0].id!=0xffffffff)
-      rc = nouveauEventWait(display->nvhostctrl, fence->nv_fences[0].id, fence->nv_fences[0].value, -1);
+      rc = nvEventWait(display->nvhostctrl, fence->nv_fences[0].id, fence->nv_fences[0].value, -1);
     if (R_FAILED(rc)) {
         TRACE("Failed to wait for fence\n");
-        return EGL_FALSE;
+        //return EGL_FALSE;
     }
 
     p_atomic_inc(&surface->stfbi->stamp);
