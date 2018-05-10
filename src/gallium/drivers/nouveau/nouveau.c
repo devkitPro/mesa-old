@@ -114,7 +114,7 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 		}
 		fifo->object = parent;
 		fifo->channel = drm->nvhostgpu;
-		fifo->pushbuf = NOUVEAU_GEM_DOMAIN_VRAM;
+		fifo->pushbuf = 0;
 		obj->data = fifo;
 		obj->length = sizeof(*fifo);
 	} else if (oclass == MAXWELL_B) {
@@ -135,11 +135,17 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 void
 nouveau_object_del(struct nouveau_object **pobj)
 {
-	struct nouveau_object *obj = *pobj;
 	CALLED();
+	if (!pobj)
+		return;
+
+	struct nouveau_object *obj = *pobj;
+	if (!obj)
+		return;
+
 	if (obj->data)
 		free(obj->data);
-  free(obj);
+	free(obj);
 	*pobj = NULL;
 }
 
@@ -356,6 +362,10 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	struct nouveau_bo *bo = &nvbo->base;
 	Result rc;
 	CALLED();
+	if (align == 0)
+		align = 0x1000;
+
+	NOUVEAU_DBG(MISC, "nouveau: Allocating BO of size %ld and flags %x\n", size, flags);
 
 	if (!nvbo)
 		return -ENOMEM;
@@ -363,7 +373,7 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	bo->device = dev;
 	bo->flags = flags;
 	bo->size = size;
-	bo->map = memalign(0x1000, size);
+	bo->map = memalign(align, size);
 	if (!bo->map)
 		goto cleanup;
 	memset(bo->map, 0, size);
@@ -387,6 +397,7 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 		TRACE("Failed to map bo");
 		goto cleanup;
 	}
+	bo->offset = nvbo->map_handle;
 
   if (config) {
   	bo->config = *config;
