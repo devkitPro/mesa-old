@@ -156,19 +156,23 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	entry.entry1 = (u32)(va >> 32);
 	err("offset: %ld length: %ld words: %ld va: %lx\n", offset, length, length / 4, va);
 
+	static bool first_buf = true;
+	if (first_buf)
+		pushbuf_dump(nvpb->bgn, push->cur);
+	first_buf = false;
+
 	rc = nvioctlChannel_SubmitGpfifo(fifo->channel, &entry, 1, 0x104, &fence);
 	if (R_FAILED(rc)) {
 		err("kernel rejected pushbuf: %d\n", rc);
-		pushbuf_dump(nvpb->bgn, push->cur);
+		static bool first_fail = true;
+		if (first_fail)
+			pushbuf_dump(nvpb->bgn, push->cur);
+		first_fail = false;
 		return -errno;
 	}
-	pushbuf_dump(nvpb->bgn, push->cur);
-
-	// Set the start for the next command buffer
-	nvpb->bgn = push->cur;
-	//push->cur = nvpb->bgn;
 
 	TRACE("Waiting for fence\n");
+	svcSleepThread(1000000000ull);
 	// Only run nvEventWait when the fence is valid and the id is not NO_FENCE.
 	if (fence.id!=0xffffffff)
 	{
@@ -189,7 +193,15 @@ static int
 pushbuf_flush(struct nouveau_pushbuf *push)
 {
 	CALLED();
-	return pushbuf_submit(push, push->channel);
+	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
+
+	int ret = pushbuf_submit(push, push->channel);
+
+	// Set the start for the next command buffer
+	nvpb->bgn = push->cur;
+	//push->cur = nvpb->bgn;
+
+	return ret;
 }
 
 static void
