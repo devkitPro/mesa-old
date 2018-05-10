@@ -9,7 +9,7 @@
 #  include <winsock2.h>
 #  include <windows.h>
 #  include <ws2tcpip.h>
-#elif defined(PIPE_OS_UNIX)
+#elif defined(PIPE_OS_UNIX) || defined(PIPE_OS_SWITCH)
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <unistd.h>
