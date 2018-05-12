@@ -102,6 +102,7 @@ struct switch_egl_surface
     _EGLSurface base;
     struct st_framebuffer_iface *stfbi;
     struct st_visual stvis;
+    struct pipe_resource *textures[ST_ATTACHMENT_COUNT];
 
     Binder session;
     bufferProducerQueueBufferOutput output;
@@ -305,27 +306,24 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
         */
         if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
         {
-            TRACE("Backbuffer\n");
             s32 index = surface->CurrentProducerBuffer;
             if (statts[i] == ST_ATTACHMENT_FRONT_LEFT)
                 index = (index + 1) % NUM_SWAP_BUFFERS;
-            pipe_resource_reference(&out[i], surface->buffers[index]);
+            out[i] = surface->textures[statts[i]] = surface->buffers[index];
         }
         else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
         {
-            TRACE("Depthstencil\n");
             templat.format = surface->stvis.depth_stencil_format;
             templat.bind = PIPE_BIND_DEPTH_STENCIL;
             pipe_resource_reference(&out[i], NULL);
-            out[i] = screen->resource_create(screen, &templat);
+            out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
         }
         else if (statts[i] == ST_ATTACHMENT_ACCUM)
         {
-            TRACE("Accumulator\n");
             templat.format = surface->stvis.accum_format;
             templat.bind = PIPE_BIND_RENDER_TARGET;
             pipe_resource_reference(&out[i], NULL);
-            out[i] = screen->resource_create(screen, &templat);
+            out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
         }
     }
 
