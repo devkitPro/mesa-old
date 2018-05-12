@@ -118,7 +118,7 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 		obj->data = fifo;
 		obj->length = sizeof(*fifo);
 	} else if (oclass == MAXWELL_B) {
-		rc = nvioctlChannel_AllocObjCtx(drm->nvhostgpu, oclass, 0);
+		rc = nvioctlChannel_AllocObjCtx(drm->nvhostgpu, oclass, 0, &obj->handle);
 		if (R_FAILED(rc)) {
 			free(obj);
 			return -errno;
@@ -199,7 +199,7 @@ nouveau_device_new(struct nouveau_object *parent, int32_t oclass,
 {
 	struct nouveau_drm *drm = nouveau_drm(parent);
 	struct nouveau_device_priv *nvdev;
-	gpu_characteristics gpu_chars;
+	nvioctl_gpu_characteristics gpu_chars;
 	char *tmp;
 	Result rc;
 	CALLED();

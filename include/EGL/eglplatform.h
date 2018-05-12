@@ -143,7 +143,7 @@ typedef khronos_uintptr_t  EGLNativeWindowType;
 
 typedef ViDisplay       *EGLNativeDisplayType;
 typedef khronos_uint8_t *EGLNativePixmapType;
-typedef khronos_uint8_t *EGLNativeWindowType;
+typedef char            *EGLNativeWindowType;
 
 #else
 #error "Platform not recognized"

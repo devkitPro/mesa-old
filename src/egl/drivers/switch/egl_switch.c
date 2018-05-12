@@ -70,17 +70,12 @@
 #endif
 #define ERROR(x...) printf("egl_switch: " x)
 
-#define NUM_SWAP_BUFFERS 2
-
 _EGL_DRIVER_STANDARD_TYPECASTS(switch_egl)
 
 struct switch_egl_display
 {
     struct st_manager *stmgr;
     struct st_api *stapi;
-
-    struct pipe_screen *nvscreen;
-    struct pipe_context *nvctx;
 
     u32 nvhostctrl;
     Handle VsyncEvent;
@@ -103,13 +98,6 @@ struct switch_egl_surface
     struct st_framebuffer_iface *stfbi;
     struct st_visual stvis;
     struct pipe_resource *textures[ST_ATTACHMENT_COUNT];
-
-    Binder session;
-    bufferProducerQueueBufferOutput output;
-
-    bufferProducerFence DequeueFence;
-    s32 CurrentProducerBuffer;
-    struct pipe_resource *buffers[NUM_SWAP_BUFFERS];
 };
 
 struct switch_framebuffer
@@ -120,73 +108,6 @@ struct switch_framebuffer
 };
 
 static uint32_t drifb_ID = 0;
-extern u32 __nx_applet_type;
-
-static bufferProducerQueueBufferInput QueueBufferData = {
-    .timestamp = 0x0,
-    .isAutoTimestamp = 0x1,
-    .crop = {0, 0, 1280, 720}, //Official apps which use multiple resolutions configure this for the currently used resolution, depending on the current appletOperationMode.
-    .scalingMode = 0x0,
-    .transform = NATIVE_WINDOW_TRANSFORM_FLIP_V,
-    .stickyTransform = 0x0,
-    .unk = {0x0, 0x1},
-
-    .fence = {
-        .is_valid = 0x1,
-        .nv_fences = {
-            {
-            .id = 0xffffffff, //Official sw sets this to the output fence from the last nvioctlChannel_SubmitGPFIFO().
-            .value = 0x0,
-            },
-            {0xffffffff, 0x0}, {0xffffffff, 0x0}, {0xffffffff, 0x0},
-        },
-    }
-};
-
-// Some of this struct is based on tegra_dc_ext_flip_windowattr.
-static bufferProducerGraphicBuffer BufferInitData = {
-    .magic = 0x47424652,//"RFBG"/'GBFR'
-    .format = 0x1,
-    .usage = 0xb00,
-
-    .pid = 0x2a, //Official sw sets this to the output of "getpid()", which calls a func which is hard-coded for returning 0x2a.
-    .refcount = 0x0,  //Official sw sets this to the output of "android_atomic_inc()".
-
-    .numFds = 0x0,
-    .numInts = sizeof(BufferInitData.data)>>2,//0x51
-
-    .data = {
-        .unk_x0 = 0xffffffff,
-        .unk_x8 = 0x0,
-        .unk_xc = 0xdaffcaff,
-        .unk_x10 = 0x2a,
-        .unk_x14 = 0,
-        .unk_x18 = 0xb00,
-        .unk_x1c = 0x1,
-        .unk_x20 = 0x1,
-        .unk_x2c = 0x1,
-        .unk_x30 = 0,
-        .flags = 0x532120,
-        .unk_x40 = 0x1,
-        .unk_x44 = 0x3,
-        .unk_x54 = 0xfe,
-        .unk_x58 = 0x4,
-    }
-};
-
-static bool
-GetNativeWindowID(u8* buf, s32 *out_ID)
-{
-    CALLED();
-    u32 *bufptr = (u32*)buf;
-    if(bufptr[0] < 0xc)
-        return false;
-
-    //bufptr = start of ParcelData
-    bufptr = (u32*)&buf[bufptr[1]];
-    *out_ID = (s32)bufptr[2];
-    return true;
-}
 
 static void
 switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
@@ -220,17 +141,14 @@ static boolean
 switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    enum st_attachment_type statt)
 {
-    struct switch_egl_display *display = stfbi_to_display(stfbi);
     struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
     struct pipe_context *pipe = stctx->pipe;
-    struct pipe_context *nvpipe = display->nvctx;
     struct pipe_resource *res = surface->textures[statt];
     struct pipe_transfer *transfer = NULL;
-    struct pipe_transfer *nvtransfer = NULL;
     struct pipe_box box;
     void *map;
     ubyte *src, *dst;
-    unsigned y, bytes, bpp, width = 1280;
+    unsigned y, bytes, bpp, width;
     int dst_stride;
     CALLED();
 
@@ -238,14 +156,13 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
 
     map = pipe->transfer_map(pipe, res, 0, PIPE_TRANSFER_READ, &box,
                             &transfer);
-    dst = nvpipe->transfer_map(nvpipe, surface->buffers[surface->CurrentProducerBuffer],
-                              0, PIPE_TRANSFER_WRITE | PIPE_TRANSFER_UNSYNCHRONIZED | PIPE_TRANSFER_MAP_DIRECTLY, &box, &nvtransfer);
 
     /*
     * Copy the color buffer from the resource to the user's buffer.
     */
     bpp = util_format_get_blocksize(surface->stvis.color_format);
     src = map;
+    dst = gfxGetFramebuffer(&width, NULL);
     dst_stride = bpp * width;
     bytes = bpp * res->width0;
 
@@ -256,22 +173,9 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
       src += transfer->stride;
     }
 
-    nvpipe->transfer_unmap(nvpipe, nvtransfer);
     pipe->transfer_unmap(pipe, transfer);
-
+    gfxFlushBuffers();
     return TRUE;
-}
-
-static Result
-nvEventWait(u32 fd, u32 syncpt_id, u32 threshold, s32 timeout) {
-    Result rc=0;
-    u32 result;
-
-    do {
-        rc = nvioctlNvhostCtrl_EventWait(fd, syncpt_id, threshold, timeout, 0, &result);
-    } while(rc==5);//timeout error
-
-    return rc;
 }
 
 static boolean
@@ -282,8 +186,10 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
     struct pipe_screen *screen = stfbi->state_manager->screen;
     enum st_attachment_type i;
     struct pipe_resource templat;
-    u32 width = 1280, height = 720; // TODO: Get the resolution through viGetDisplayResolution().
+    u32 width, height;
     CALLED();
+
+    gfxGetFramebufferResolution(&width, &height);
 
     memset(&templat, 0, sizeof(templat));
     templat.target = PIPE_TEXTURE_RECT;
@@ -345,8 +251,7 @@ static _EGLSurface *
 switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     _EGLConfig *conf, void *native_window, const EGLint *attrib_list)
 {
-    Result rc;
-    struct switch_egl_surface* surface;
+    struct switch_egl_surface *surface;
     struct switch_framebuffer *fb;
     struct switch_egl_display *display = switch_egl_display(dpy);
     CALLED();
@@ -376,35 +281,6 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     surface->stfbi = &fb->base;
     surface->base.SwapInterval = 1;
 
-    s32 window_id;
-    if (!GetNativeWindowID((u8*)native_window, &window_id))
-    {
-        _eglError(EGL_BAD_NATIVE_WINDOW, "GetNativeWindowID");
-        goto cleanup;
-    }
-
-    binderCreateSession(&surface->session, viGetSession_IHOSBinderDriverRelay()->handle, window_id);
-    rc = binderInitSession(&surface->session, 0x0f);
-    if (R_FAILED(rc))
-    {
-        _eglError(EGL_BAD_NATIVE_WINDOW, "binderInitSession");
-        goto cleanup;
-    }
-
-    rc = bufferProducerInitialize(&surface->session);
-    if (R_FAILED(rc))
-    {
-        _eglError(EGL_BAD_NATIVE_WINDOW, "bufferProducerInitialize");
-        goto cleanup;
-    }
-
-    rc = bufferProducerConnect(NATIVE_WINDOW_API_CPU, 0, &surface->output);
-    if (R_FAILED(rc))
-    {
-        _eglError(EGL_BAD_NATIVE_WINDOW, "bufferProducerConnect");
-        goto cleanup;
-    }
-
     switch_fill_st_visual(&surface->stvis, conf);
 
     /* setup the st_framebuffer_iface */
@@ -415,55 +291,6 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     p_atomic_set(&fb->base.stamp, 0);
     fb->base.ID = p_atomic_inc_return(&drifb_ID);
     fb->base.state_manager = display->stmgr;
-
-    u32 width = 1280, height = 720;
-    for (int i = 0; i < NUM_SWAP_BUFFERS; i++)
-    {
-        struct winsys_handle whandle;
-        memset(&whandle, 0, sizeof(whandle));
-        whandle.type = DRM_API_HANDLE_TYPE_KMS;
-        struct pipe_resource templat;
-        templat.target = PIPE_TEXTURE_RECT;
-        templat.format = surface->stvis.color_format;
-        templat.last_level = 0;
-        templat.width0 = (u16)width;
-        templat.height0 = (u16)height;
-        templat.depth0 = 1;
-        templat.array_size = 1;
-        templat.usage = PIPE_USAGE_DEFAULT;
-        templat.bind = PIPE_BIND_RENDER_TARGET;
-        templat.flags = 0;
-
-        surface->buffers[i] = display->nvscreen->resource_create(display->nvscreen, &templat);
-        display->nvscreen->resource_get_handle(display->nvscreen, display->nvctx, surface->buffers[i], &whandle, PIPE_HANDLE_USAGE_WRITE);
-        if (!whandle.handle)
-        {
-            TRACE("Failed to get resource handle");
-            return EGL_FALSE;
-        }
-
-        BufferInitData.refcount = i;
-        BufferInitData.data.nvmap_handle0 = whandle.handle;
-        BufferInitData.data.nvmap_handle1 = whandle.handle;
-        BufferInitData.data.buffer_offset = whandle.offset;
-        BufferInitData.data.timestamp = svcGetSystemTick();
-
-        rc = bufferProducerGraphicBufferInit(i, &BufferInitData);
-        if (R_FAILED(rc)) {
-            TRACE("Failed to initialize buffer");
-            return EGL_FALSE;
-        }
-    }
-
-    rc = bufferProducerDequeueBuffer(false, width, height, 0, 0x300, &surface->CurrentProducerBuffer, &surface->DequeueFence);
-    if (R_FAILED(rc))
-        return false;
-
-    rc = bufferProducerRequestBuffer(surface->CurrentProducerBuffer, NULL);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to request buffer");
-        return EGL_FALSE;
-    }
 
     return &surface->base;
 
@@ -495,20 +322,6 @@ static EGLBoolean
 switch_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
     CALLED();
-    struct switch_egl_display *display = switch_egl_display(disp);
-    struct switch_egl_surface* surface = switch_egl_surface(surf);
-
-    //_gfxQueueBuffer(g_gfxCurrentProducerBuffer);
-    QueueBufferData.timestamp = svcGetSystemTick();
-    bufferProducerQueueBuffer(surface->CurrentProducerBuffer, &QueueBufferData, &surface->output);
-    for (int i = 0; i < NUM_SWAP_BUFFERS; i++)
-        bufferProducerDetachBuffer(i);
-    bufferProducerDisconnect(NATIVE_WINDOW_API_CPU);
-    bufferProducerExit();
-    binderExitSession(&surface->session);
-
-    for (int i = 0; i < NUM_SWAP_BUFFERS; i++)
-         display->nvscreen->resource_destroy(display->nvscreen, surface->buffers[i]);
 
     if (_eglPutSurface(surf)) {
         // XXX: detach switch_egl_surface::gl from the native window and destroy it
@@ -593,7 +406,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 {
     struct switch_egl_display *display;
     struct st_manager *stmgr;
-    Result rc;
     CALLED();
 
     if (dpy->Options.ForceSoftware)
@@ -619,36 +431,9 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     stmgr->get_param = switch_st_get_param;
 
-    nvServiceType nv_servicetype;
+    gfxInitDefault();
 
-    switch(__nx_applet_type) {
-        case AppletType_Application:
-        case AppletType_SystemApplication:
-            nv_servicetype = NVSERVTYPE_Application;
-            break;
-
-        case AppletType_SystemApplet:
-        case AppletType_LibraryApplet:
-        case AppletType_OverlayApplet:
-        default:
-            nv_servicetype = NVSERVTYPE_Applet;
-            break;
-    }
-
-    TRACE("Initializing nv service\n");
-    rc = nvInitialize(nv_servicetype, 0x300000);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to initialize nv service\n");
-        return EGL_FALSE;
-    }
-
-    TRACE("Opening /dev/nvhost-ctrl\n");
-    rc = nvOpen(&display->nvhostctrl, "/dev/nvhost-ctrl");
-    if (R_FAILED(rc)) {
-        TRACE("Failed to open /dev/nvhost-ctrl\n");
-        return EGL_FALSE;
-    }
-
+#if 0
     TRACE("Creating nouveau screen\n");
     display->nvscreen = nouveau_switch_screen_create(display->nvhostctrl);
     if (!display->nvscreen)
@@ -664,7 +449,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         TRACE("Failed to create nouveau context\n");
         return EGL_FALSE;
     }
-
+#endif
     {
         struct sw_winsys *winsys;
         struct pipe_screen *screen;
@@ -695,32 +480,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     {
     }*/
 
-    viGetDisplayVsyncEvent((ViDisplay*)dpy->PlatformDisplay, &display->VsyncEvent);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to get vsync event\n");
-        return EGL_FALSE;
-    }
-
-    {
-        u32 width = 1280, height = 720;
-        u32 aligned_width = (width+15) & ~15;//Align to 16.
-        u32 aligned_height = (height+127) & ~127;//Align to 128.
-        u32 size = aligned_width*aligned_height*4;
-
-        BufferInitData.width = width;
-        BufferInitData.height = height;
-        BufferInitData.stride = aligned_width;
-
-        BufferInitData.data.width_unk0 = width;
-        BufferInitData.data.width_unk1 = width;
-        BufferInitData.data.height_unk = height;
-
-        BufferInitData.data.byte_stride = aligned_width*4;
-
-        BufferInitData.data.buffer_size0 = size;
-        BufferInitData.data.buffer_size1 = size;
-    }
-
     display->stmgr = stmgr;
     display->stapi = st_gl_api_create();
     return EGL_TRUE;
@@ -732,13 +491,8 @@ switch_terminate(_EGLDriver* drv, _EGLDisplay* dpy)
 {
     CALLED();
 
-    struct switch_egl_display *display = switch_egl_display(dpy);
-    display->nvctx->destroy(display->nvctx);
-    display->nvscreen->destroy(display->nvscreen);
-    nvClose(display->nvhostctrl);
-    nvExit();
-    svcCloseHandle(display->VsyncEvent);
-    free(display);
+    gfxExit();
+    free(dpy);
 
     return EGL_TRUE;
 }
@@ -816,65 +570,16 @@ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
 }
 
 static EGLBoolean
-_waitevent(Handle *handle)
-{
-    Result rc=0, rc2=0;
-
-    svcResetSignal(*handle);
-
-    do {
-        rc = svcWaitSynchronizationSingle(*handle, U64_MAX);
-
-        if (R_SUCCEEDED(rc))
-            rc2 = svcResetSignal(*handle);
-
-    } while(R_FAILED(rc) || (rc2 & 0x3FFFFF)==0xFA01);
-
-    return R_FAILED(rc2) ? EGL_FALSE : EGL_TRUE;
-}
-
-static EGLBoolean
 switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
-    struct switch_egl_display* display = switch_egl_display(dpy);
-    struct switch_egl_surface* surface = switch_egl_surface(surf);
-    bufferProducerFence *fence = &surface->DequeueFence;
-    Result rc;
-    u32 width = 1280, height = 720; // TODO: Get the resolution through viGetDisplayResolution().
     CALLED();
 
-    TRACE("Swapping out buffer %d\n", surface->CurrentProducerBuffer);
-    QueueBufferData.timestamp = svcGetSystemTick();
-    rc = bufferProducerQueueBuffer(surface->CurrentProducerBuffer, &QueueBufferData, &surface->output);
-    if (R_FAILED(rc)) {
-        return EGL_FALSE;
-    }
-
-    rc = bufferProducerDequeueBuffer(false, width, height, 0, 0x300, &surface->CurrentProducerBuffer, fence);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to dequeue buffer\n");
-        return EGL_FALSE;
-    }
-
-    TRACE("Swapping in buffer %d\n", surface->CurrentProducerBuffer);
-    // Only run nvEventWait when the fence is valid and the id is not NO_FENCE.
-    if (fence->is_valid && fence->nv_fences[0].id!=0xffffffff)
-      rc = nvEventWait(display->nvhostctrl, fence->nv_fences[0].id, fence->nv_fences[0].value, -1);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to wait for fence\n");
-        //return EGL_FALSE;
-    }
-
-    TRACE("Requesting buffer %d\n", surface->CurrentProducerBuffer);
-    //if (R_SUCCEEDED(rc)) g_gfxCurrentBuffer = (g_gfxCurrentBuffer + 1) & (g_nvgfx_totalframebufs-1);
-    rc = bufferProducerRequestBuffer(surface->CurrentProducerBuffer, NULL);
-    if (R_FAILED(rc)) {
-        TRACE("Failed to request buffer\n");
-        return EGL_FALSE;
-    }
+    TRACE("Swapping out buffers\n");
+    gfxSwapBuffers();
 
     TRACE("Wait for V-Sync event\n");
-    return _waitevent(&display->VsyncEvent);
+    gfxWaitForVsync();
+    return EGL_TRUE;
 }
 
 

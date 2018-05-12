@@ -152,8 +152,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 	u64 offset = (u64)nvpb->bgn - (u64)nvpb->ptr;
 	u64 length = (u64)push->cur - (u64)nvpb->bgn;
 	u64 va = ((u64)nvbo->map_handle + offset) | (length << 42);
-	entry.entry0 = (u32)va;
-	entry.entry1 = (u32)(va >> 32);
+	entry.desc = va;
 	err("offset: %ld length: %ld words: %ld va: %lx\n", offset, length, length / 4, va);
 
 	static bool first_buf = true;
