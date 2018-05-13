@@ -43,11 +43,7 @@ int nouveau_object_mclass(struct nouveau_object *,
 
 struct nouveau_drm {
 	struct nouveau_object client;
-	uint32_t nvhostctrlgpu;
-	uint32_t nvhostasgpu;
-	uint32_t nvmap;
-	uint32_t nvhostgpu;
-	uint32_t nvhostctrl;
+	int fd;
 	uint32_t version;
 	bool nvif;
 };
@@ -60,7 +56,7 @@ nouveau_drm(struct nouveau_object *obj)
 	return (struct nouveau_drm *)obj;
 }
 
-int nouveau_drm_new(uint32_t nvhostctrl, struct nouveau_drm **);
+int nouveau_drm_new(int fd, struct nouveau_drm **);
 void nouveau_drm_del(struct nouveau_drm **);
 
 struct nouveau_device {
@@ -274,4 +270,7 @@ struct nv04_notify {
 	uint32_t offset;
 	uint32_t length;
 };
+
+int nouveau_3d_init(struct nouveau_device *);
+
 #endif

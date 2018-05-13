@@ -98,31 +98,24 @@ nouveau_object_new(struct nouveau_object *parent, uint64_t handle,
 		   uint32_t oclass, void *data, uint32_t length,
 		   struct nouveau_object **pobj)
 {
-	struct nouveau_drm *drm = nouveau_drm(parent);
 	struct nouveau_object *obj;
-	Result rc;
 	CALLED();
 
 	if (!(obj = calloc(1, sizeof(*obj))))
 		return -ENOMEM;
 
-	if (oclass == NOUVEAU_FIFO_CHANNEL_CLASS) {
+	if (oclass == NOUVEAU_FIFO_CHANNEL_CLASS)
+	{
 		struct nouveau_fifo *fifo;
 		if (!(fifo = calloc(1, sizeof(*fifo)))) {
 			free(obj);
 			return -ENOMEM;
 		}
 		fifo->object = parent;
-		fifo->channel = drm->nvhostgpu;
+		fifo->channel = 0;
 		fifo->pushbuf = 0;
 		obj->data = fifo;
 		obj->length = sizeof(*fifo);
-	} else if (oclass == MAXWELL_B) {
-		rc = nvioctlChannel_AllocObjCtx(drm->nvhostgpu, oclass, 0, &obj->handle);
-		if (R_FAILED(rc)) {
-			free(obj);
-			return -errno;
-		}
 	}
 
 	obj->parent = parent;
@@ -152,43 +145,22 @@ nouveau_object_del(struct nouveau_object **pobj)
 void
 nouveau_drm_del(struct nouveau_drm **pdrm)
 {
-	struct nouveau_drm *drm = *pdrm;
 	CALLED();
-	//nvClose(drm->nvhostctrl);
-	nvClose(drm->nvhostgpu);
-	nvClose(drm->nvmap);
-	nvClose(drm->nvhostasgpu);
-	nvClose(drm->nvhostctrlgpu);
+	struct nouveau_drm *drm = *pdrm;
 	free(drm);
 	*pdrm = NULL;
 }
 
 int
-nouveau_drm_new(uint32_t nvhostctrl, struct nouveau_drm **pdrm)
+nouveau_drm_new(int fd, struct nouveau_drm **pdrm)
 {
-	struct nouveau_drm *drm;
 	CALLED();
+	struct nouveau_drm *drm;
 	if (!(drm = calloc(1, sizeof(*drm)))) {
 		return -ENOMEM;
 	}
-	drm->nvhostctrl = nvhostctrl;
 
-	if (R_FAILED(nvOpen(&drm->nvhostctrlgpu, "/dev/nvhost-ctrl-gpu"))) {
-		return -errno;
-	}
-
-	if (R_FAILED(nvOpen(&drm->nvhostasgpu, "/dev/nvhost-as-gpu"))) {
-		return -errno;
-	}
-
-	if (R_FAILED(nvOpen(&drm->nvmap, "/dev/nvmap"))) {
-		return -errno;
-	}
-
-	if (R_FAILED(nvOpen(&drm->nvhostgpu, "/dev/nvhost-gpu"))) {
-		return -errno;
-	}
-
+	drm->fd = fd;
 	*pdrm = drm;
 	return 0;
 }
@@ -199,14 +171,9 @@ nouveau_device_new(struct nouveau_object *parent, int32_t oclass,
 {
 	struct nouveau_drm *drm = nouveau_drm(parent);
 	struct nouveau_device_priv *nvdev;
-	nvioctl_gpu_characteristics gpu_chars;
 	char *tmp;
 	Result rc;
 	CALLED();
-
-	rc = nvioctlNvhostCtrlGpu_GetCharacteristics(drm->nvhostctrlgpu, &gpu_chars);
-	if (R_FAILED(rc))
-		return -errno;
 
 	if (!(nvdev = calloc(1, sizeof(*nvdev))))
 		return -ENOMEM;
@@ -215,29 +182,17 @@ nouveau_device_new(struct nouveau_object *parent, int32_t oclass,
 	nvdev->base.object.handle = ~0ULL;
 	nvdev->base.object.oclass = NOUVEAU_DEVICE_CLASS;
 	nvdev->base.object.length = ~0;
-	nvdev->base.chipset = gpu_chars.arch;
+	nvdev->base.chipset = 0x120; // NVGPU_GPU_ARCH_GM200
 
-	rc = nvioctlNvhostAsGpu_InitializeEx(drm->nvhostasgpu, 1, /*0*/0x10000);
+	rc = nvGpuCreate(&nvdev->gpu);
 	if (R_FAILED(rc))
-		return -ENOMEM;
+	{
+		TRACE("Failed to create GPU.");
+		return -rc;
+	}
 
-	rc = nvioctlNvhostAsGpu_AllocSpace(drm->nvhostasgpu, 0x10000, /*0x20000*/0x10000, 0, 0x10000, &nvdev->allocspace_offset);
-	if (R_FAILED(rc))
-		return -ENOMEM;
-
-	rc = nvioctlNvhostAsGpu_BindChannel(drm->nvhostasgpu, drm->nvhostgpu);
-	if (R_FAILED(rc))
-		return -errno;
-
-	rc = nvioctlChannel_SetNvmapFd(drm->nvhostgpu, drm->nvmap);
-	if (R_FAILED(rc))
-		return -errno;
-
-	rc = nvioctlChannel_SetPriority(drm->nvhostgpu, NvChannelPriority_Medium);
-	if (R_FAILED(rc))
-		return -errno;
-
-	if (!os_get_total_physical_memory(&nvdev->base.vram_size)) {
+	if (!os_get_total_physical_memory(&nvdev->base.vram_size))
+	{
 		TRACE("Failed to get physical memory size.");
 		return -errno;
 	}
@@ -259,8 +214,11 @@ nouveau_device_new(struct nouveau_object *parent, int32_t oclass,
 void
 nouveau_device_del(struct nouveau_device **pdev)
 {
-	struct nouveau_device_priv *nvdev = nouveau_device(*pdev);
 	CALLED();
+	struct nouveau_device_priv *nvdev = nouveau_device(*pdev);
+
+	nvGpuClose(&nvdev->gpu);
+
 	if (nvdev) {
 		free(nvdev->client);
 		mtx_destroy(&nvdev->lock);
@@ -345,11 +303,10 @@ static void
 nouveau_bo_del(struct nouveau_bo *bo)
 {
 	CALLED();
+	struct nouveau_bo_priv *nvbo = nouveau_bo(bo);
 
-	if (bo->map) {
-			free(bo->map);
-			bo->map = NULL;
-	}
+	nvBufferFree(&nvbo->buffer);
+	free(nvbo);
 }
 
 int
@@ -357,58 +314,51 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	       uint64_t size, union nouveau_bo_config *config,
 	       struct nouveau_bo **pbo)
 {
-	struct nouveau_drm *drm = nouveau_drm(&dev->object);
+	CALLED();
+	struct nouveau_device_priv *nvdev = nouveau_device(dev);
+
 	struct nouveau_bo_priv *nvbo = calloc(1, sizeof(*nvbo));
 	struct nouveau_bo *bo = &nvbo->base;
 	Result rc;
-	CALLED();
+
 	if (align == 0)
 		align = 0x1000;
 
-	NOUVEAU_DBG(MISC, "nouveau: Allocating BO of size %ld and flags %x\n", size, flags);
+	NOUVEAU_DBG(MISC, "nouveau: Allocating BO of size %ld, align %x and flags %x\n", size, align, flags);
 
 	if (!nvbo)
 		return -ENOMEM;
+
+	// TODO: Read-only buffers?
+	NvBufferKind kind = NvBufferKind_Pitch;
+	if (config)
+	{
+		kind = (NvBufferKind)config->nvc0.memtype;
+	}
+	rc = nvBufferCreateRw(&nvbo->buffer, size, align, kind, &nvdev->gpu.addr_space);
+	if (R_FAILED(rc))
+	{
+		TRACE("Failed to create NvBuffer (%d)\n", rc);
+		free(nvbo);
+		return -rc;
+	}
+
 	p_atomic_set(&nvbo->refcnt, 1);
 	bo->device = dev;
 	bo->flags = flags;
 	bo->size = size;
-	bo->map = memalign(align, size);
-	if (!bo->map)
-		goto cleanup;
+	bo->offset = nvBufferGetGpuAddr(&nvbo->buffer);
+	bo->map = nvBufferGetCpuAddr(&nvbo->buffer);
 	memset(bo->map, 0, size);
 	armDCacheFlush(bo->map, size);
+	nvBufferMakeCpuUncached(&nvbo->buffer);
 
-  rc = nvioctlNvmap_Create(drm->nvmap, bo->size, &bo->handle);
-	if (R_FAILED(rc)) {
-		TRACE("Failed to create bo handle");
-		goto cleanup;
-	}
-
-  rc = nvioctlNvmap_Alloc(drm->nvmap, bo->handle, 0x20000, 0, align, 0, bo->map);
-	if (R_FAILED(rc)) {
-		TRACE("Failed to allocate bo");
-		goto cleanup;
-	}
-
-	// TODO: Should probably specify some flags here
-	rc = nvioctlNvhostAsGpu_MapBufferEx(drm->nvhostasgpu, 0, -1, bo->handle, 0, 0, bo->size, 0, &nvbo->map_handle);
-	if (R_FAILED(rc)) {
-		TRACE("Failed to map bo");
-		goto cleanup;
-	}
-	bo->offset = nvbo->map_handle;
-
-  if (config) {
-  	bo->config = *config;
+	if (config)
+	{
+		bo->config = *config;
 	}
 	*pbo = bo;
 	return 0;
-
-cleanup:
-	free(bo->map);
-	free(nvbo);
-	return -ENOMEM;
 }
 
 /* Unused
@@ -496,8 +446,20 @@ int
 nouveau_bo_map(struct nouveau_bo *bo, uint32_t access,
 	       struct nouveau_client *client)
 {
-	// Memory is always shared, so it doesn't need to be mapped again
 	CALLED();
+#if 0
+	struct nouveau_bo_priv *nvbo = nouveau_bo(bo);
+	Result rc;
+	if (!nvbo->map_handle)
+	{
+		rc = nvBufferMapAsTexture(&nvbo->buffer, bo->config.nvc0.memtype);
+		if (R_FAILED(rc))
+			return -rc;
+		nvbo->map_handle = nvBufferGetGpuAddrTexture(&nvbo->buffer);
+	}
+
+	bo->map = (void*)nvbo->map_handle;
+#endif
 	return nouveau_bo_wait(bo, access, client);
 }
 
@@ -505,4 +467,23 @@ void
 nouveau_bo_unmap(struct nouveau_bo *bo)
 {
 	CALLED();
+	//bo->map = NULL;
+}
+
+int nouveau_3d_init(struct nouveau_device * dev)
+{
+	CALLED();
+	struct nouveau_device_priv *nvdev = nouveau_device(dev);
+	Result rc;
+
+	vnInit(&nvdev->v, &nvdev->gpu);
+	vnInit3D(&nvdev->v);
+	rc = vnSubmit(&nvdev->v);
+	if (R_FAILED(rc))
+	{
+		TRACE("Failed to init 3d context\n");
+		return -rc;
+	}
+
+	return 0;
 }

@@ -84,6 +84,7 @@ struct nouveau_bo_priv {
 	uint64_t map_handle;
 	uint32_t name;
 	uint32_t access;
+	NvBuffer buffer;
 };
 
 static inline struct nouveau_bo_priv *
@@ -102,12 +103,20 @@ struct nouveau_device_priv {
 	int gart_limit_percent, vram_limit_percent;
 	uint64_t allocspace_offset;
 	mtx_t lock;
+	NvGpu gpu;
+	Vn v;
 };
 
 static inline struct nouveau_device_priv *
 nouveau_device(struct nouveau_device *dev)
 {
 	return (struct nouveau_device_priv *)dev;
+}
+
+static inline NvChannel ToNvChannel(u32 fd)
+{
+	NvChannel ch = { fd, true };
+	return ch;
 }
 
 #endif

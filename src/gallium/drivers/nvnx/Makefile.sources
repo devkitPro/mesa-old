@@ -1,0 +1,4 @@
+C_SOURCES := \
+	nvnx_pipe.c \
+	nvnx_public.h \
+	nvnx_state.c

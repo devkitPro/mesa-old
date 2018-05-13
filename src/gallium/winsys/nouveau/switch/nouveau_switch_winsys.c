@@ -31,7 +31,7 @@ bool nouveau_drm_screen_unref(struct nouveau_screen *screen)
 }
 
 PUBLIC struct pipe_screen *
-nouveau_switch_screen_create(uint32_t nvhostctrl)
+nouveau_switch_screen_create(void)
 {
 	struct nouveau_drm *drm = NULL;
 	struct nouveau_device *dev = NULL;
@@ -41,7 +41,7 @@ nouveau_switch_screen_create(uint32_t nvhostctrl)
 
 	mtx_lock(&nouveau_screen_mutex);
 
-	ret = nouveau_drm_new(nvhostctrl, &drm);
+	ret = nouveau_drm_new(0, &drm);
 	if (ret)
 		goto err;
 

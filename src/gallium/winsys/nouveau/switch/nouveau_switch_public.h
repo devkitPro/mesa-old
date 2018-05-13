@@ -4,6 +4,6 @@
 
 struct pipe_screen;
 
-struct pipe_screen *nouveau_switch_screen_create(uint32_t nvhostctrl);
+struct pipe_screen *nouveau_switch_screen_create(void);
 
 #endif

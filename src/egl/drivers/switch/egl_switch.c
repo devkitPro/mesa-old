@@ -44,6 +44,7 @@
 
 #include "sw/null/null_sw_winsys.h"
 #include "nouveau/switch/nouveau_switch_public.h"
+#include "nvnx/nvnx_public.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
@@ -408,9 +409,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     struct st_manager *stmgr;
     CALLED();
 
-    if (dpy->Options.ForceSoftware)
-        return EGL_FALSE;
-
     if (!switch_add_configs_for_visuals(dpy))
         return EGL_FALSE;
 
@@ -433,23 +431,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     gfxInitDefault();
 
-#if 0
-    TRACE("Creating nouveau screen\n");
-    display->nvscreen = nouveau_switch_screen_create(display->nvhostctrl);
-    if (!display->nvscreen)
-    {
-        TRACE("Failed to create nouveau screen\n");
-        return EGL_FALSE;
-    }
-
-    TRACE("Creating nouveau context\n");
-    display->nvctx = display->nvscreen->context_create(display->nvscreen, display, 0);
-    if (!display->nvctx)
-    {
-        TRACE("Failed to create nouveau context\n");
-        return EGL_FALSE;
-    }
-#endif
+#if 1
     {
         struct sw_winsys *winsys;
         struct pipe_screen *screen;
@@ -463,7 +445,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
             return EGL_FALSE;
 
         /* Create llvmpipe or softpipe screen */
-        TRACE("Creating screen\n");
+        TRACE("Creating sw screen\n");
         screen = sw_screen_create(winsys);
         if (!screen)
         {
@@ -472,13 +454,37 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
             return EGL_FALSE;
         }
 
-        /* Inject optional trace, debug, etc. wrappers */
-        TRACE("Wrapping screen\n");
-        stmgr->screen = debug_screen_wrap(screen);
+        if ( dpy->Options.ForceSoftware )
+        {
+            /* Inject optional trace, debug, etc. wrappers */
+            TRACE("Wrapping screen\n");
+            stmgr->screen = debug_screen_wrap(screen);
+        }
+        else
+        {
+            TRACE("Wrapping screen with nx\n");
+            stmgr->screen = nvnx_screen_create(screen);
+        }
     }
-    /*else
+
+#else
     {
-    }*/
+       struct pipe_screen *screen;
+
+        /* Create nouveau screen */
+       TRACE("Creating nouveau screen\n");
+       screen = nouveau_switch_screen_create();
+       if (!screen)
+       {
+           TRACE("Failed to create nouveau screen\n");
+           return EGL_FALSE;
+       }
+
+       /* Inject optional trace, debug, etc. wrappers */
+       TRACE("Wrapping screen\n");
+       stmgr->screen = debug_screen_wrap(screen);
+    }
+#endif
 
     display->stmgr = stmgr;
     display->stapi = st_gl_api_create();
