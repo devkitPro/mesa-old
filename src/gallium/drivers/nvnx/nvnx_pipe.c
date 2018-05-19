@@ -484,7 +484,14 @@ static int nvnx_get_shader_param(struct pipe_screen* pscreen,
    CALLED();
    struct pipe_screen *screen = ((struct nvnx_screen*)pscreen)->oscreen;
 
-   return screen->get_shader_param(screen, shader, param);
+   switch (param) {
+      case PIPE_SHADER_CAP_PREFERRED_IR:
+         return PIPE_SHADER_IR_TGSI;
+      default:
+         return screen->get_shader_param(screen, shader, param);
+   }
+
+   return 0;
 }
 
 static int nvnx_get_compute_param(struct pipe_screen *pscreen,

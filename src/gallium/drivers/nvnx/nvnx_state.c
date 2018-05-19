@@ -29,6 +29,12 @@
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
+#include "tgsi/tgsi_parse.h"
+#include "nouveau/nvc0/nvc0_program.h"
+
+/* nvc0_program.c */
+bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
+                            struct pipe_debug_callback *);
 
 #ifdef DEBUG
 #	define TRACE(x...) printf("nvnx: " x)
@@ -37,6 +43,8 @@
 #	define TRACE(x...)
 #  define CALLED()
 #endif
+
+#define NVGPU_GPU_ARCH_GM200 0x120
 
 static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
@@ -249,18 +257,96 @@ static void *nvnx_create_vertex_elements(struct pipe_context *ctx,
    return MALLOC(1);
 }
 
-static void *nvnx_create_shader_state(struct pipe_context *ctx,
-                                      const struct pipe_shader_state *state)
+static void *
+nvnx_sp_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso, unsigned type)
 {
    CALLED();
-   return MALLOC(1);
+   struct nvc0_program *prog;
+
+   prog = CALLOC_STRUCT(nvc0_program);
+   if (!prog)
+      return NULL;
+
+   prog->type = type;
+
+   if (cso->tokens)
+      prog->pipe.tokens = tgsi_dup_tokens(cso->tokens);
+
+   if (cso->stream_output.num_outputs)
+      prog->pipe.stream_output = cso->stream_output;
+
+   prog->translated = nvc0_program_translate(prog, NVGPU_GPU_ARCH_GM200, NULL);
+
+   return (void *)prog;
 }
 
-static void *nvnx_create_compute_state(struct pipe_context *ctx,
-                                       const struct pipe_compute_state *state)
+static void
+nvnx_sp_state_delete(struct pipe_context *pipe, void *hwcso)
 {
-   CALLED();
-   return MALLOC(1);
+   struct nvc0_program *prog = (struct nvc0_program *)hwcso;
+
+   //nvc0_program_destroy(nvc0_context(pipe), prog);
+
+   FREE((void *)prog->pipe.tokens);
+   FREE(prog);
+}
+
+static void *
+nvnx_vp_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso)
+{
+   return nvnx_sp_state_create(pipe, cso, PIPE_SHADER_VERTEX);
+}
+
+static void *
+nvnx_fp_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso)
+{
+   return nvnx_sp_state_create(pipe, cso, PIPE_SHADER_FRAGMENT);
+}
+
+static void *
+nvnx_gp_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso)
+{
+   return nvnx_sp_state_create(pipe, cso, PIPE_SHADER_GEOMETRY);
+}
+
+static void *
+nvnx_tcp_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso)
+{
+   return nvnx_sp_state_create(pipe, cso, PIPE_SHADER_TESS_CTRL);
+}
+
+static void *
+nvnx_tep_state_create(struct pipe_context *pipe,
+                     const struct pipe_shader_state *cso)
+{
+   return nvnx_sp_state_create(pipe, cso, PIPE_SHADER_TESS_EVAL);
+}
+
+static void *
+nvnx_cp_state_create(struct pipe_context *pipe,
+                     const struct pipe_compute_state *cso)
+{
+   struct nvc0_program *prog;
+
+   prog = CALLOC_STRUCT(nvc0_program);
+   if (!prog)
+      return NULL;
+   prog->type = PIPE_SHADER_COMPUTE;
+
+   prog->cp.smem_size = cso->req_local_mem;
+   prog->cp.lmem_size = cso->req_private_mem;
+   prog->parm_size = cso->req_input_mem;
+
+   prog->pipe.tokens = tgsi_dup_tokens((const struct tgsi_token *)cso->prog);
+
+   prog->translated = nvc0_program_translate(prog, NVGPU_GPU_ARCH_GM200, NULL);
+
+   return (void *)prog;
 }
 
 static struct pipe_stream_output_target *nvnx_create_stream_output_target(
@@ -304,17 +390,17 @@ void nvnx_init_state_functions(struct pipe_context *ctx)
    CALLED();
    ctx->create_blend_state = nvnx_create_blend_state;
    ctx->create_depth_stencil_alpha_state = nvnx_create_dsa_state;
-   ctx->create_fs_state = nvnx_create_shader_state;
    ctx->create_rasterizer_state = nvnx_create_rs_state;
    ctx->create_sampler_state = nvnx_create_sampler_state;
    ctx->create_sampler_view = nvnx_create_sampler_view;
    ctx->create_surface = nvnx_create_surface;
    ctx->create_vertex_elements_state = nvnx_create_vertex_elements;
-   ctx->create_compute_state = nvnx_create_compute_state;
-   ctx->create_tcs_state = nvnx_create_shader_state;
-   ctx->create_tes_state = nvnx_create_shader_state;
-   ctx->create_gs_state = nvnx_create_shader_state;
-   ctx->create_vs_state = nvnx_create_shader_state;
+   ctx->create_vs_state = nvnx_vp_state_create;
+   ctx->create_fs_state = nvnx_fp_state_create;
+   ctx->create_gs_state = nvnx_gp_state_create;
+   ctx->create_tcs_state = nvnx_tcp_state_create;
+   ctx->create_tes_state = nvnx_tep_state_create;
+   ctx->create_compute_state = nvnx_cp_state_create;
    ctx->bind_blend_state = nvnx_bind_state;
    ctx->bind_depth_stencil_alpha_state = nvnx_bind_state;
    ctx->bind_sampler_states = nvnx_bind_sampler_states;
@@ -328,15 +414,15 @@ void nvnx_init_state_functions(struct pipe_context *ctx)
    ctx->bind_vs_state = nvnx_bind_state;
    ctx->delete_blend_state = nvnx_delete_state;
    ctx->delete_depth_stencil_alpha_state = nvnx_delete_state;
-   ctx->delete_fs_state = nvnx_delete_state;
    ctx->delete_rasterizer_state = nvnx_delete_state;
    ctx->delete_sampler_state = nvnx_delete_state;
    ctx->delete_vertex_elements_state = nvnx_delete_state;
-   ctx->delete_compute_state = nvnx_delete_state;
-   ctx->delete_tcs_state = nvnx_delete_state;
-   ctx->delete_tes_state = nvnx_delete_state;
-   ctx->delete_gs_state = nvnx_delete_state;
-   ctx->delete_vs_state = nvnx_delete_state;
+   ctx->delete_vs_state = nvnx_sp_state_delete;
+   ctx->delete_fs_state = nvnx_sp_state_delete;
+   ctx->delete_tcs_state = nvnx_sp_state_delete;
+   ctx->delete_tes_state = nvnx_sp_state_delete;
+   ctx->delete_gs_state = nvnx_sp_state_delete;
+   ctx->delete_compute_state = nvnx_sp_state_delete;
    ctx->set_blend_color = nvnx_set_blend_color;
    ctx->set_clip_state = nvnx_set_clip_state;
    ctx->set_constant_buffer = nvnx_set_constant_buffer;
