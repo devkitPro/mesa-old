@@ -46,8 +46,6 @@
 
 #include "os/os_misc.h"
 
-#include <switch.h>
-
 
 #ifdef DEBUG
 #	define TRACE(x...) NOUVEAU_DBG(MISC, "nouveau: " x)

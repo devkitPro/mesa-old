@@ -8,6 +8,8 @@
 #include "util/u_atomic.h"
 #include "c11/threads.h"
 
+#include <switch.h>
+
 #ifdef DEBUG
 static uint32_t nouveau_debug;
 #define dbg_on(lvl) (nouveau_debug & (1 << lvl))

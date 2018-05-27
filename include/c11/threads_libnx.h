@@ -39,7 +39,20 @@
 #include <time.h>
 #include <sys/time.h>
 
-#include <switch.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <switch/types.h>
+#include <switch/result.h>
+#include <switch/kernel/svc.h>
+#include <switch/kernel/mutex.h>
+#include <switch/kernel/condvar.h>
+#include <switch/kernel/thread.h>
+
+#ifdef __cplusplus
+}
+#endif
 
 /*---------------------------- macros ----------------------------*/
 #define ONCE_FLAG_INIT {0}
