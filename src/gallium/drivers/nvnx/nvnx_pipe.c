@@ -31,6 +31,8 @@
 #include "util/u_format.h"
 #include "util/u_upload_mgr.h"
 #include "nvnx_public.h"
+#include "nvnx_screen.h"
+#include "nvnx_context.h"
 
 #include <switch.h>
 
@@ -43,28 +45,6 @@
 #endif
 
 void nvnx_init_state_functions(struct pipe_context *ctx);
-
-struct nvnx_screen {
-   struct pipe_screen	base;
-   struct pipe_screen	*oscreen;
-   NvGpu	               gpu;
-   Vn                   vn;
-};
-
-static struct nvnx_screen *nvnx_screen(struct pipe_context *ctx)
-{
-   return (struct nvnx_screen *)ctx->screen;
-}
-
-struct nvnx_context {
-   struct pipe_context	         base;
-   struct pipe_framebuffer_state framebuffer;
-};
-
-static struct nvnx_context *nvnx_context(struct pipe_context *ctx)
-{
-   return (struct nvnx_context *)ctx;
-}
 
 /*
  * query

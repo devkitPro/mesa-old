@@ -30,6 +30,10 @@
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
 #include "tgsi/tgsi_parse.h"
+#include "nvnx_screen.h"
+#include "nvnx_context.h"
+
+#define nouveau_heap NvBuffer
 #include "nouveau/nvc0/nvc0_program.h"
 
 /* nvc0_program.c */
@@ -188,16 +192,6 @@ static void nvnx_set_viewport_states(struct pipe_context *ctx,
    CALLED();
 }
 
-struct nvnx_context {
-   struct pipe_context	         base;
-   struct pipe_framebuffer_state framebuffer;
-};
-
-static struct nvnx_context *nvnx_context(struct pipe_context *ctx)
-{
-   return (struct nvnx_context *)ctx;
-}
-
 static void nvnx_set_framebuffer_state(struct pipe_context *ctx,
                                        const struct pipe_framebuffer_state *state)
 {
@@ -262,7 +256,9 @@ nvnx_sp_state_create(struct pipe_context *pipe,
                      const struct pipe_shader_state *cso, unsigned type)
 {
    CALLED();
+   struct nvnx_screen *nxscreen = nvnx_screen(pipe);
    struct nvc0_program *prog;
+   Result rc;
 
    prog = CALLOC_STRUCT(nvc0_program);
    if (!prog)
@@ -277,17 +273,75 @@ nvnx_sp_state_create(struct pipe_context *pipe,
       prog->pipe.stream_output = cso->stream_output;
 
    prog->translated = nvc0_program_translate(prog, NVGPU_GPU_ARCH_GM200, NULL);
+   if (!prog->translated)
+   {
+      TRACE("Failed to translate program!\n");
+      return NULL;
+   }
 
+   prog->mem = (NvBuffer *)CALLOC(1, sizeof(NvBuffer));
+
+   /* On Fermi, SP_START_ID must be aligned to 0x40.
+    * On Kepler, the first instruction must be aligned to 0x80 because
+    * latency information is expected only at certain positions.
+    */
+   rc = nvBufferCreate(prog->mem, prog->code_size + 0x70, 0x40, NvBufferKind_Pitch, &nxscreen->gpu.addr_space);
+   if (R_FAILED(rc))
+   {
+      TRACE("Failed to create program buffer!\n");
+      return NULL;
+   }
+   memcpy(nvBufferGetCpuAddr(prog->mem), prog->code, prog->code_size);
    return (void *)prog;
+}
+
+static void
+nvnx_sp_bind_state(struct pipe_context *pipe, void *po)
+{
+   CALLED();
+   struct nvnx_screen *nxscreen = nvnx_screen(pipe);
+   struct nvc0_program *prog = (struct nvc0_program *)po;
+
+   NvProgramStage stage;
+   switch (prog->type)
+   {
+      case PIPE_SHADER_VERTEX:
+         TRACE("Binding vertex shader program\n");
+         stage = NvProgramStage_VP_B;
+         break;
+      case PIPE_SHADER_FRAGMENT:
+         TRACE("Binding fragment shader program\n");
+         stage = NvProgramStage_FP;
+         break;
+      case PIPE_SHADER_GEOMETRY:
+         TRACE("Binding geometry shader program\n");
+         stage = NvProgramStage_GP;
+         break;
+      case PIPE_SHADER_TESS_CTRL:
+         TRACE("Binding control shader program\n");
+         stage = NvProgramStage_TCP;
+         break;
+      case PIPE_SHADER_TESS_EVAL:
+         TRACE("Binding evaluation shader program\n");
+         stage = NvProgramStage_TEP;
+         break;
+      default:
+         TRACE("Unknown shader type\n");
+         return;
+   }
+
+   vnBindProgram(&nxscreen->vn, stage, prog->num_gprs, prog->mem);
 }
 
 static void
 nvnx_sp_state_delete(struct pipe_context *pipe, void *hwcso)
 {
+   CALLED();
    struct nvc0_program *prog = (struct nvc0_program *)hwcso;
 
    //nvc0_program_destroy(nvc0_context(pipe), prog);
 
+   FREE(prog->mem);
    FREE((void *)prog->pipe.tokens);
    FREE(prog);
 }
@@ -404,14 +458,14 @@ void nvnx_init_state_functions(struct pipe_context *ctx)
    ctx->bind_blend_state = nvnx_bind_state;
    ctx->bind_depth_stencil_alpha_state = nvnx_bind_state;
    ctx->bind_sampler_states = nvnx_bind_sampler_states;
-   ctx->bind_fs_state = nvnx_bind_state;
    ctx->bind_rasterizer_state = nvnx_bind_state;
    ctx->bind_vertex_elements_state = nvnx_bind_state;
    ctx->bind_compute_state = nvnx_bind_state;
-   ctx->bind_tcs_state = nvnx_bind_state;
-   ctx->bind_tes_state = nvnx_bind_state;
-   ctx->bind_gs_state = nvnx_bind_state;
-   ctx->bind_vs_state = nvnx_bind_state;
+   ctx->bind_vs_state = nvnx_sp_bind_state;
+   ctx->bind_fs_state = nvnx_sp_bind_state;
+   ctx->bind_tcs_state = nvnx_sp_bind_state;
+   ctx->bind_tes_state = nvnx_sp_bind_state;
+   ctx->bind_gs_state = nvnx_sp_bind_state;
    ctx->delete_blend_state = nvnx_delete_state;
    ctx->delete_depth_stencil_alpha_state = nvnx_delete_state;
    ctx->delete_rasterizer_state = nvnx_delete_state;
