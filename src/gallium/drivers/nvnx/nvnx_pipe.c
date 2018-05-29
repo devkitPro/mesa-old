@@ -272,7 +272,8 @@ static void nvnx_clear(struct pipe_context *ctx, unsigned buffers,
    }
 
    printf("Before clear: %x\n", *(u32*)nvBufferGetCpuAddr(&nxres->buffer));
-   vnClearBuffer(&nxscreen->vn, &nxres->buffer, nxctx->framebuffer.width, nxctx->framebuffer.height, 0xd5, (float[]) {1,1,1,1});
+   vnClearBuffer(&nxscreen->vn, &nxres->buffer, nxctx->framebuffer.width,
+      nxctx->framebuffer.height, nvc0_format_table[nxres->base.format].rt, color->f);
    rc = vnSubmit(&nxscreen->vn);
    if (R_FAILED(rc)) {
       TRACE("Failed to clear buffer (%d)\n", rc);
