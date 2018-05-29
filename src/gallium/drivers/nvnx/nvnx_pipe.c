@@ -212,8 +212,8 @@ static void *nvnx_transfer_map(struct pipe_context *pipe,
    transfer->level = level;
    transfer->usage = usage;
    transfer->box = *box;
-   transfer->stride = 1;
-   transfer->layer_stride = 1;
+   transfer->stride = util_format_get_blocksize(resource->format) * resource->width0;
+   transfer->layer_stride = transfer->stride * resource->height0;
    *ptransfer = transfer;
 
    return nvBufferGetCpuAddr(&nresource->buffer);
