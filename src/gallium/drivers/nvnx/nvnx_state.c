@@ -33,7 +33,6 @@
 #include "nvnx_screen.h"
 #include "nvnx_context.h"
 
-#define nouveau_heap NvBuffer
 #include "nouveau/nvc0/nvc0_program.h"
 
 /* nvc0_program.c */
@@ -258,7 +257,6 @@ nvnx_sp_state_create(struct pipe_context *pipe,
    CALLED();
    struct nvnx_screen *nxscreen = nvnx_screen(pipe);
    struct nvc0_program *prog;
-   Result rc;
 
    prog = CALLOC_STRUCT(nvc0_program);
    if (!prog)
@@ -279,19 +277,27 @@ nvnx_sp_state_create(struct pipe_context *pipe,
       return NULL;
    }
 
-   prog->mem = (NvBuffer *)CALLOC(1, sizeof(NvBuffer));
-
    /* On Fermi, SP_START_ID must be aligned to 0x40.
-    * On Kepler, the first instruction must be aligned to 0x80 because
-    * latency information is expected only at certain positions.
-    */
-   rc = nvBufferCreate(prog->mem, prog->code_size + 0x70, 0x40, NvBufferKind_Pitch, &nxscreen->gpu.addr_space);
-   if (R_FAILED(rc))
-   {
-      TRACE("Failed to create program buffer!\n");
-      return NULL;
+   * On Kepler, the first instruction must be aligned to 0x80 because
+   * latency information is expected only at certain positions.
+   */
+   prog->code_base = nxscreen->code_offset;
+   switch (nxscreen->code_offset & 0xff) {
+      case 0x40: prog->code_base += 0x70; break;
+      case 0x80: prog->code_base += 0x30; break;
+      case 0xc0: prog->code_base += 0x70; break;
+      default:
+         prog->code_base += 0x30;
+         assert((nxscreen->code_offset & 0xff) == 0x00);
+         break;
    }
-   memcpy(nvBufferGetCpuAddr(prog->mem), prog->code, prog->code_size);
+
+   void *dst = nvBufferGetCpuAddr(&nxscreen->vn.code_segment) + prog->code_base;
+   memcpy(dst, prog->code, prog->code_size);
+   armDCacheFlush(dst, prog->code_size);
+
+   // TODO: Handle code segment resize
+   nxscreen->code_offset += align(prog->code_size + 0x70, 0x40);
    return (void *)prog;
 }
 
@@ -330,7 +336,7 @@ nvnx_sp_bind_state(struct pipe_context *pipe, void *po)
          return;
    }
 
-   vnBindProgram(&nxscreen->vn, stage, prog->num_gprs, prog->mem);
+   vnBindProgram(&nxscreen->vn, stage, prog->code_base, prog->num_gprs);
 }
 
 static void

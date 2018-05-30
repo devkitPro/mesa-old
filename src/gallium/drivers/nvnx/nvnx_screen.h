@@ -8,6 +8,7 @@ struct nvnx_screen {
    struct pipe_screen	*oscreen;
    NvGpu	               gpu;
    Vn                   vn;
+   u32                  code_offset;
 };
 
 static struct nvnx_screen *nvnx_screen(struct pipe_context *ctx)
