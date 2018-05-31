@@ -28,10 +28,12 @@
 #include "pipe/p_screen.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
+#include "util/u_helpers.h"
 #include "util/u_transfer.h"
 #include "tgsi/tgsi_parse.h"
 #include "nvnx_screen.h"
 #include "nvnx_context.h"
+#include "nvnx_resource.h"
 
 #include "nouveau/nvc0/nvc0_program.h"
 
@@ -41,9 +43,11 @@ bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
 
 #ifdef DEBUG
 #	define TRACE(x...) printf("nvnx: " x)
+#  define STEP() printf("%s:%d" __PRETTY_FUNCTION__, __LINE__);
 #	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
 #else
 #	define TRACE(x...)
+#  define STEP()
 #  define CALLED()
 #endif
 
@@ -52,6 +56,31 @@ bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
 static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
    CALLED();
+
+   struct nvnx_context *nxctx = nvnx_context(ctx);
+   struct nvnx_screen *nxscreen = nvnx_screen(ctx);
+   //unsigned inst_count = info->instance_count;
+   unsigned vert_count = info->count;
+
+   for (int slot = 0; slot < nxctx->num_vtxbufs; slot++)
+   {
+      struct pipe_vertex_buffer *vbo = &nxctx->vtxbuf[slot];
+
+      iova_t start;
+      if (vbo->is_user_buffer)
+      {
+         TRACE("Ignoring user buffer\n");
+         continue; // too hard
+      }
+      else
+      {
+         struct nvnx_resource *res = nvnx_resource(vbo->buffer.resource);
+         start = nvBufferGetGpuAddr(&res->buffer);
+      }
+
+      size_t size = vbo->stride * vert_count;
+      vnBindVertexBuffer(&nxscreen->vn, slot, start, size);
+   }
 }
 
 static void nvnx_launch_grid(struct pipe_context *ctx,
@@ -240,6 +269,10 @@ static void nvnx_set_vertex_buffers(struct pipe_context *ctx,
                                     const struct pipe_vertex_buffer *buffers)
 {
    CALLED();
+   struct nvnx_context *nxctx = nvnx_context(ctx);
+
+   util_set_vertex_buffers_count(nxctx->vtxbuf, &nxctx->num_vtxbufs, buffers,
+                                 start_slot, count);
 }
 
 static void *nvnx_create_vertex_elements(struct pipe_context *ctx,

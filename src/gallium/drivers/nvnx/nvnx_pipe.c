@@ -33,6 +33,7 @@
 #include "nvnx_public.h"
 #include "nvnx_screen.h"
 #include "nvnx_context.h"
+#include "nvnx_resource.h"
 
 #include <switch.h>
 
@@ -94,20 +95,6 @@ static void
 nvnx_set_active_query_state(struct pipe_context *pipe, boolean enable)
 {
    CALLED();
-}
-
-
-/*
- * resource
- */
-struct nvnx_resource {
-   struct pipe_resource	base;
-   NvBuffer buffer;
-};
-
-static struct nvnx_resource *nvnx_resource(struct pipe_resource *res)
-{
-   return (struct nvnx_resource *)res;
 }
 
 static struct pipe_resource *nvnx_resource_create(struct pipe_screen *screen,

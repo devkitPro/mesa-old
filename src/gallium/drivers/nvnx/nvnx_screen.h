@@ -1,3 +1,4 @@
+#pragma once
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 
