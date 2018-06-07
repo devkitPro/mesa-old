@@ -36,6 +36,7 @@
 #include "nvnx_resource.h"
 
 #include "nouveau/nvc0/nvc0_program.h"
+#include "nouveau/nvc0/nvc0_3d.xml.h"
 
 /* nvc0_program.c */
 bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
@@ -52,6 +53,10 @@ bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
 #endif
 
 #define NVGPU_GPU_ARCH_GM200 0x120
+#define NVNX_ATTRIB_FORMATS_MAX 16
+#define NVNX_VERTEX_ATTRIB_INACTIVE                                       \
+   NVC0_3D_VERTEX_ATTRIB_FORMAT_TYPE_FLOAT |                              \
+   NVC0_3D_VERTEX_ATTRIB_FORMAT_SIZE_32_32_32_32 | NVC0_3D_VERTEX_ATTRIB_FORMAT_CONST
 
 static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
@@ -61,6 +66,8 @@ static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
    struct nvnx_screen *nxscreen = nvnx_screen(ctx);
    //unsigned inst_count = info->instance_count;
    unsigned vert_count = info->count;
+   NvPrimitiveMode prim;
+   Result rc;
 
    for (int slot = 0; slot < nxctx->num_vtxbufs; slot++)
    {
@@ -79,7 +86,68 @@ static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
       }
 
       size_t size = vbo->stride * vert_count;
-      vnBindVertexBuffer(&nxscreen->vn, slot, start, size);
+      vnBindVertexBuffer(&nxscreen->vn, slot, start + vbo->buffer_offset, size);
+   }
+
+   switch (info->mode)
+   {
+      case PIPE_PRIM_POINTS:
+         prim = NvPrimitiveMode_Points;
+         break;
+      case PIPE_PRIM_LINES:
+         prim = NvPrimitiveMode_Lines;
+         break;
+      case PIPE_PRIM_LINE_LOOP:
+         prim = NvPrimitiveMode_Line_Loop;
+         break;
+      case PIPE_PRIM_LINE_STRIP:
+         prim = NvPrimitiveMode_Line_Strip;
+         break;
+      case PIPE_PRIM_TRIANGLES:
+         prim = NvPrimitiveMode_Triangles;
+         break;
+      case PIPE_PRIM_TRIANGLE_STRIP:
+         prim = NvPrimitiveMode_Triangle_Strip;
+         break;
+      case PIPE_PRIM_TRIANGLE_FAN:
+         prim = NvPrimitiveMode_Triangle_Fan;
+         break;
+      case PIPE_PRIM_QUADS:
+         prim = NvPrimitiveMode_Quads;
+         break;
+      case PIPE_PRIM_QUAD_STRIP:
+         prim = NvPrimitiveMode_Quad_Strip;
+         break;
+      case PIPE_PRIM_POLYGON:
+         prim = NvPrimitiveMode_Polygon;
+         break;
+      case PIPE_PRIM_LINES_ADJACENCY:
+         prim = NvPrimitiveMode_Lines_Adjacency;
+         break;
+      case PIPE_PRIM_LINE_STRIP_ADJACENCY:
+         prim = NvPrimitiveMode_Line_Strip_Adjacency;
+         break;
+      case PIPE_PRIM_TRIANGLES_ADJACENCY:
+         prim = NvPrimitiveMode_Triangles_Adjacency;
+         break;
+      case PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY:
+         prim = NvPrimitiveMode_Triangle_Strip_Adjacency;
+         break;
+      case PIPE_PRIM_PATCHES:
+         prim = NvPrimitiveMode_Patches;
+         break;
+      default:
+         TRACE("Unknown primitive type\n");
+         return;
+   }
+
+   TRACE("indirect: %d, count_from_stream_output: %d, index_size: %d\n", !!info->indirect, !!info->count_from_stream_output, info->index_size);
+   TRACE("prim: %d, start: %d, count: %d\n", prim, info->start, info->count);
+   vnDrawArrays(&nxscreen->vn, prim, info->start, info->count);
+
+   rc = vnSubmit(&nxscreen->vn);
+   if (R_FAILED(rc)) {
+      TRACE("Failed to draw arrays (%d)\n", rc);
    }
 }
 
@@ -218,6 +286,16 @@ static void nvnx_set_viewport_states(struct pipe_context *ctx,
                                      const struct pipe_viewport_state *state)
 {
    CALLED();
+   struct nvnx_context *nxctx = nvnx_context(ctx);
+   struct nvnx_screen *nxscreen = nvnx_screen(ctx);
+
+   for (int i = 0; i < num_viewports; i++)
+   {
+      const struct pipe_viewport_state *v = &state[i];
+      vnViewportSetScale(&nxctx->viewports[start_slot + i], v->scale[0], v->scale[1], v->scale[2]);
+      vnViewportSetTranslate(&nxctx->viewports[start_slot + i], v->translate[0], v->translate[1], v->translate[2]);
+      vnSetViewport(&nxscreen->vn, i, &nxctx->viewports[i]);
+   }
 }
 
 static void nvnx_set_framebuffer_state(struct pipe_context *ctx,
@@ -270,9 +348,16 @@ static void nvnx_set_vertex_buffers(struct pipe_context *ctx,
 {
    CALLED();
    struct nvnx_context *nxctx = nvnx_context(ctx);
+   struct nvnx_screen *nxscreen = nvnx_screen(ctx);
 
    util_set_vertex_buffers_count(nxctx->vtxbuf, &nxctx->num_vtxbufs, buffers,
                                  start_slot, count);
+
+   u32 data[NVNX_ATTRIB_FORMATS_MAX];
+   assert(nxctx->num_vtxbufs < NVNX_ATTRIB_FORMATS_MAX);
+   for (int i = 0; i < nxctx->num_vtxbufs; i++)
+      data[i] = nxctx->vtxbuf[i].stride | 1 << 12;
+   vnBindVertexStreamState(&nxscreen->vn, nxctx->num_vtxbufs, data);
 }
 
 static void *nvnx_create_vertex_elements(struct pipe_context *ctx,
@@ -280,7 +365,35 @@ static void *nvnx_create_vertex_elements(struct pipe_context *ctx,
                                          const struct pipe_vertex_element *state)
 {
    CALLED();
-   return MALLOC(1);
+   struct nvnx_vertex_stateobj* obj = CALLOC_STRUCT(nvnx_vertex_stateobj);
+
+   int i;
+   for (i = 0; i < count; i++)
+   {
+      const struct pipe_vertex_element *ve = &state[i];
+      enum pipe_format fmt = ve->src_format;
+      TRACE("Attrib %d set to format: 0x%x index: %d offset: %d\n", i, nvc0_vertex_format[fmt].vtx, ve->vertex_buffer_index, ve->src_offset);
+
+      obj->pipe[i] = *ve;
+      obj->elements[i] = nvc0_vertex_format[fmt].vtx;
+      obj->elements[i] |= ve->vertex_buffer_index;
+      obj->elements[i] |= ve->src_offset << 7;
+   }
+
+   for (; i < NVNX_ATTRIB_FORMATS_MAX; i++)
+      obj->elements[i] = NVNX_VERTEX_ATTRIB_INACTIVE;
+
+   return obj;
+}
+
+static void nvnx_bind_vertex_elements(struct pipe_context *ctx, void *state)
+{
+   CALLED();
+   struct nvnx_context *nxctx = nvnx_context(ctx);
+   struct nvnx_screen *nxscreen = nvnx_screen(ctx);
+   struct nvnx_vertex_stateobj *obj = (struct nvnx_vertex_stateobj *)state;
+   nxctx->vtxstate = obj;
+   vnBindVertexAttribState(&nxscreen->vn, NVNX_ATTRIB_FORMATS_MAX, nxctx->vtxstate->elements);
 }
 
 static void *
@@ -498,7 +611,7 @@ void nvnx_init_state_functions(struct pipe_context *ctx)
    ctx->bind_depth_stencil_alpha_state = nvnx_bind_state;
    ctx->bind_sampler_states = nvnx_bind_sampler_states;
    ctx->bind_rasterizer_state = nvnx_bind_state;
-   ctx->bind_vertex_elements_state = nvnx_bind_state;
+   ctx->bind_vertex_elements_state = nvnx_bind_vertex_elements;
    ctx->bind_compute_state = nvnx_bind_state;
    ctx->bind_vs_state = nvnx_sp_bind_state;
    ctx->bind_fs_state = nvnx_sp_bind_state;

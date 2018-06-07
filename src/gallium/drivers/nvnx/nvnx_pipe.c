@@ -227,6 +227,8 @@ static void nvnx_buffer_subdata(struct pipe_context *pipe,
                                 unsigned size, const void *data)
 {
    CALLED();
+   struct nvnx_resource *nxres = nvnx_resource(resource);
+   memcpy(nvBufferGetCpuAddr(&nxres->buffer) + offset, data, size);
 }
 
 static void nvnx_texture_subdata(struct pipe_context *pipe,
@@ -252,24 +254,13 @@ static void nvnx_clear(struct pipe_context *ctx, unsigned buffers,
    struct nvnx_screen *nxscreen = nvnx_screen(ctx);
    struct nvnx_context *nxctx = nvnx_context(ctx);
    struct nvnx_resource *nxres = nvnx_resource(nxctx->framebuffer.cbufs[0]->texture);
-   Result rc;
    if (!nxres) {
       TRACE("Framebuffer incomplete!\n");
       return;
    }
 
-   printf("Before clear: %x\n", *(u32*)nvBufferGetCpuAddr(&nxres->buffer));
    vnClearBuffer(&nxscreen->vn, &nxres->buffer, nxctx->framebuffer.width,
       nxctx->framebuffer.height, nvc0_format_table[nxres->base.format].rt, color->f);
-   rc = vnSubmit(&nxscreen->vn);
-   if (R_FAILED(rc)) {
-      TRACE("Failed to clear buffer (%d)\n", rc);
-   }
-
-   // TODO: Fencing
-   svcSleepThread(1000000000ull);
-
-   printf("After clear: %x\n", *(u32*)nvBufferGetCpuAddr(&nxres->buffer));
 }
 
 static void nvnx_clear_render_target(struct pipe_context *ctx,
@@ -365,6 +356,9 @@ static struct pipe_context *nvnx_create_context(struct pipe_screen *screen,
 
    ctx->screen = screen;
    ctx->priv = priv;
+
+   for (int i = 0; i < PIPE_MAX_VIEWPORTS; i++)
+      vnViewportSetDefaults(&nvnx_ctx->viewports[i]);
 
    ctx->stream_uploader = u_upload_create_default(ctx);
    if (!ctx->stream_uploader) {
