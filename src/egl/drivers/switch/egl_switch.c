@@ -430,6 +430,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     stmgr->get_param = switch_st_get_param;
 
     gfxInitDefault();
+    gfxSetMode(GfxMode_TiledDouble);
 
 #if 1
     {
