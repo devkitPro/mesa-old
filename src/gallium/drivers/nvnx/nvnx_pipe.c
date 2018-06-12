@@ -34,16 +34,9 @@
 #include "nvnx_screen.h"
 #include "nvnx_context.h"
 #include "nvnx_resource.h"
+#include "nvnx_debug.h"
 
 #include <switch.h>
-
-#ifdef DEBUG
-#	define TRACE(x...) printf("nvnx: " x)
-#	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
-#else
-#	define TRACE(x...)
-#  define CALLED()
-#endif
 
 void nvnx_init_state_functions(struct pipe_context *ctx);
 

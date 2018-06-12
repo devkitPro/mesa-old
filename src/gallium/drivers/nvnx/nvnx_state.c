@@ -34,6 +34,7 @@
 #include "nvnx_screen.h"
 #include "nvnx_context.h"
 #include "nvnx_resource.h"
+#include "nvnx_debug.h"
 
 #include "nouveau/nvc0/nvc0_program.h"
 #include "nouveau/nvc0/nvc0_3d.xml.h"
@@ -41,16 +42,6 @@
 /* nvc0_program.c */
 bool nvc0_program_translate(struct nvc0_program *, uint16_t chipset,
                             struct pipe_debug_callback *);
-
-#ifdef DEBUG
-#	define TRACE(x...) printf("nvnx: " x)
-#  define STEP() printf("%s:%d" __PRETTY_FUNCTION__, __LINE__);
-#	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
-#else
-#	define TRACE(x...)
-#  define STEP()
-#  define CALLED()
-#endif
 
 #define NVGPU_GPU_ARCH_GM200 0x120
 #define NVNX_ATTRIB_FORMATS_MAX 16
