@@ -439,8 +439,9 @@ nvnx_sp_state_create(struct pipe_context *pipe,
    }
 
    void *dst = nvBufferGetCpuAddr(&nxscreen->vn.code_segment) + prog->code_base;
-   memcpy(dst, prog->code, prog->code_size);
-   armDCacheFlush(dst, prog->code_size);
+   memcpy(dst, prog->hdr, NVC0_SHADER_HEADER_SIZE);
+   memcpy(dst + NVC0_SHADER_HEADER_SIZE, prog->code, prog->code_size);
+   armDCacheFlush(dst, prog->code_size + NVC0_SHADER_HEADER_SIZE);
 
    // TODO: Handle code segment resize
    nxscreen->code_offset += align(prog->code_size + 0x70, 0x40);
