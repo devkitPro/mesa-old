@@ -149,6 +149,9 @@ static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
    if (R_FAILED(rc)) {
       TRACE("Failed to draw arrays (%d)\n", rc);
    }
+
+   TRACE("Sleeping\n");
+   svcSleepThread(1000000000ull);
 }
 
 static void nvnx_launch_grid(struct pipe_context *ctx,
