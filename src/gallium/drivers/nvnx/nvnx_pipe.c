@@ -145,7 +145,7 @@ static struct pipe_resource *nvnx_resource_from_handle(struct pipe_screen *scree
    nresource->base = *templ;
    nresource->base.screen = screen;
    rc = nvAddressSpaceMapBuffer(&nvnx_screen->gpu.addr_space, whandle->handle,
-      0, &nresource->gpu_addr);
+      NvBufferKind_Generic_16BX2, &nresource->gpu_addr);
 
    nresource->gpu_addr += whandle->offset;
 
