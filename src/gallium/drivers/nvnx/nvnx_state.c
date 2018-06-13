@@ -73,7 +73,7 @@ static void nvnx_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
       else
       {
          struct nvnx_resource *res = nvnx_resource(vbo->buffer.resource);
-         start = nvBufferGetGpuAddr(&res->buffer);
+         start = res->gpu_addr;
       }
 
       size_t size = vbo->stride * vert_count;

@@ -36,6 +36,9 @@
 #include "nvnx_resource.h"
 #include "nvnx_debug.h"
 
+/* XXX this should go away */
+#include "state_tracker/drm_driver.h"
+
 #include <switch.h>
 
 void nvnx_init_state_functions(struct pipe_context *ctx);
@@ -108,8 +111,10 @@ static struct pipe_resource *nvnx_resource_create(struct pipe_screen *screen,
    nresource->base.screen = screen;
    size_t size = stride * templ->height0 * templ->depth0;
    rc = nvBufferCreateRw(&nresource->buffer, size, 0x1000, 0, &nvnx_screen->gpu.addr_space);
-   memset(nvBufferGetCpuAddr(&nresource->buffer), 0x33, size);
-   armDCacheFlush(nvBufferGetCpuAddr(&nresource->buffer), size);
+   nresource->cpu_addr = nvBufferGetCpuAddr(&nresource->buffer);
+   nresource->gpu_addr = nvBufferGetGpuAddr(&nresource->buffer);
+   memset(nresource->cpu_addr, 0x33, size);
+   armDCacheFlush(nresource->cpu_addr, size);
    nvBufferMakeCpuUncached(&nresource->buffer);
 
    pipe_reference_init(&nresource->base.reference, 1);
@@ -123,19 +128,34 @@ static struct pipe_resource *nvnx_resource_create(struct pipe_screen *screen,
 
 static struct pipe_resource *nvnx_resource_from_handle(struct pipe_screen *screen,
                                                        const struct pipe_resource *templ,
-                                                       struct winsys_handle *handle,
+                                                       struct winsys_handle *whandle,
                                                        unsigned usage)
 {
    CALLED();
    struct nvnx_screen *nvnx_screen = (struct nvnx_screen*)screen;
-   struct pipe_screen *oscreen = nvnx_screen->oscreen;
-   struct pipe_resource *result;
-   struct pipe_resource *nvnx_resource;
+   struct nvnx_resource *nresource;
+   Result rc;
+   TRACE("Create resource from handle %d with offset %d\n", whandle->handle, whandle->offset);
 
-   result = oscreen->resource_from_handle(oscreen, templ, handle, usage);
-   nvnx_resource = nvnx_resource_create(screen, result);
-   pipe_resource_reference(&result, NULL);
-   return nvnx_resource;
+   nresource = CALLOC_STRUCT(nvnx_resource);
+   if (!nresource)
+      return NULL;
+
+   // FIXME: We can't map the CPU address from the handle alone.
+   nresource->base = *templ;
+   nresource->base.screen = screen;
+   rc = nvAddressSpaceMapBuffer(&nvnx_screen->gpu.addr_space, whandle->handle,
+      0, &nresource->gpu_addr);
+
+   nresource->gpu_addr += whandle->offset;
+
+   pipe_reference_init(&nresource->base.reference, 1);
+   if (R_FAILED(rc)) {
+      TRACE("Failed to create buffer (%d)\n", rc);
+      FREE(nresource);
+      return NULL;
+   }
+   return &nresource->base;
 }
 
 static boolean nvnx_resource_get_handle(struct pipe_screen *pscreen,
@@ -166,7 +186,8 @@ static void nvnx_resource_destroy(struct pipe_screen *screen,
    CALLED();
    struct nvnx_resource *nresource = (struct nvnx_resource *)resource;
 
-   nvBufferFree(&nresource->buffer);
+   if (nresource->buffer.has_init)
+      nvBufferFree(&nresource->buffer);
    FREE(resource);
 }
 
@@ -196,7 +217,7 @@ static void *nvnx_transfer_map(struct pipe_context *pipe,
    transfer->layer_stride = transfer->stride * resource->height0;
    *ptransfer = transfer;
 
-   return nvBufferGetCpuAddr(&nresource->buffer);
+   return nresource->cpu_addr;
 }
 
 static void nvnx_transfer_flush_region(struct pipe_context *pipe,
@@ -221,7 +242,7 @@ static void nvnx_buffer_subdata(struct pipe_context *pipe,
 {
    CALLED();
    struct nvnx_resource *nxres = nvnx_resource(resource);
-   memcpy(nvBufferGetCpuAddr(&nxres->buffer) + offset, data, size);
+   memcpy(nxres->cpu_addr + offset, data, size);
 }
 
 static void nvnx_texture_subdata(struct pipe_context *pipe,

@@ -63,13 +63,13 @@
 
 
 #ifdef DEBUG
-#	define TRACE(x...) printf("egl_switch: " x)
+#	define TRACE(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)
 #	define CALLED() TRACE("CALLED: %s\n", __PRETTY_FUNCTION__)
 #else
 #	define TRACE(x...)
 # define CALLED()
 #endif
-#define ERROR(x...) printf("egl_switch: " x)
+#define ERROR(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)
 
 _EGL_DRIVER_STANDARD_TYPECASTS(switch_egl)
 
@@ -116,12 +116,12 @@ switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
     CALLED();
     // TODO: Create the visual from the config
     struct st_visual stvis = {
-        ST_ATTACHMENT_FRONT_LEFT_MASK,
+        ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK,
         PIPE_FORMAT_RGBA8888_UNORM,
         PIPE_FORMAT_NONE,
         PIPE_FORMAT_NONE,
         1,
-        ST_ATTACHMENT_FRONT_LEFT
+        ST_ATTACHMENT_BACK_LEFT
     };
     *visual = stvis;
 }
@@ -142,6 +142,8 @@ static boolean
 switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    enum st_attachment_type statt)
 {
+    // TODO: FLush front buffer changes somehow.
+#if 0
     struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
     struct pipe_context *pipe = stctx->pipe;
     struct pipe_resource *res = surface->textures[statt];
@@ -176,6 +178,7 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
 
     pipe->transfer_unmap(pipe, transfer);
     gfxFlushBuffers();
+#endif
     return TRUE;
 }
 
@@ -208,16 +211,18 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
     {
         enum pipe_format format = PIPE_FORMAT_NONE;
         unsigned bind = 0;
+        struct winsys_handle whandle;
 
-        /*
-        * At this time, we really only need to handle the front-left color
-        * attachment, since that's all we specified for the visual in
-        * osmesa_init_st_visual().
-        */
         if (statts[i] == ST_ATTACHMENT_FRONT_LEFT)
         {
             format = surface->stvis.color_format;
             bind = PIPE_BIND_RENDER_TARGET;
+        }
+        else if (statts[i] == ST_ATTACHMENT_BACK_LEFT)
+        {
+            format = surface->stvis.color_format;
+            bind = PIPE_BIND_RENDER_TARGET;
+            whandle.handle = gfxGetFramebufferHandle(&whandle.offset);
         }
         else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
         {
@@ -232,8 +237,14 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
 
         templat.format = format;
         templat.bind = bind;
-        pipe_resource_reference(&out[i], NULL);
-        out[i] = surface->textures[statts[i]] = screen->resource_create(screen, &templat);
+        if (!surface->textures[statts[i]])
+        {
+            if (statts[i] == ST_ATTACHMENT_BACK_LEFT)
+                surface->textures[statts[i]] = screen->resource_from_handle(screen, &templat, &whandle, 0);
+            else
+                surface->textures[statts[i]] = screen->resource_create(screen, &templat);
+        }
+        out[i] = surface->textures[statts[i]];
     }
 
     return TRUE;
@@ -580,9 +591,16 @@ static EGLBoolean
 switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
     CALLED();
+    struct switch_egl_surface* surface = (struct switch_egl_surface*)surf;
 
     TRACE("Swapping out buffers\n");
     gfxSwapBuffers();
+
+    // Swap buffer attachments and invalidate framebuffer
+    struct pipe_resource *old_back = surface->textures[ST_ATTACHMENT_BACK_LEFT];
+    surface->textures[ST_ATTACHMENT_BACK_LEFT] = surface->textures[ST_ATTACHMENT_FRONT_LEFT];
+    surface->textures[ST_ATTACHMENT_FRONT_LEFT] = old_back;
+    p_atomic_inc(&surface->stfbi->stamp);
 
     TRACE("Wait for V-Sync event\n");
     gfxWaitForVsync();
