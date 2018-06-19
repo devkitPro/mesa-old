@@ -297,7 +297,20 @@ static void nvnx_set_framebuffer_state(struct pipe_context *ctx,
 {
    CALLED();
    struct nvnx_context *nxctx = nvnx_context(ctx);
+   struct nvnx_screen *nxscreen = nvnx_screen(ctx);
    nxctx->framebuffer = *state;
+
+   for (int i = 0; i < state->nr_cbufs; i++)
+   {
+      struct pipe_surface* pt = state->cbufs[i];
+      struct nvnx_resource *nxres = nvnx_resource(pt->texture);
+
+      vnRenderTargetSetColorBuffer(&nxctx->targets[i], nxres->gpu_addr);
+      vnRenderTargetSetDimensions(&nxctx->targets[i], state->width, state->height);
+      vnRenderTargetSetFormat(&nxctx->targets[i], (NvBufferKind)nvc0_format_table[nxres->base.format].rt);
+   }
+
+   vnSetRenderTargets(&nxscreen->vn, nxctx->targets, state->nr_cbufs);
 }
 
 static void nvnx_set_constant_buffer(struct pipe_context *ctx,

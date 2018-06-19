@@ -110,19 +110,28 @@ static struct pipe_resource *nvnx_resource_create(struct pipe_screen *screen,
    nresource->base = *templ;
    nresource->base.screen = screen;
    size_t size = stride * templ->height0 * templ->depth0;
-   rc = nvBufferCreateRw(&nresource->buffer, size, 0x1000, 0, &nvnx_screen->gpu.addr_space);
-   nresource->cpu_addr = nvBufferGetCpuAddr(&nresource->buffer);
-   nresource->gpu_addr = nvBufferGetGpuAddr(&nresource->buffer);
-   memset(nresource->cpu_addr, 0x33, size);
-   armDCacheFlush(nresource->cpu_addr, size);
-   nvBufferMakeCpuUncached(&nresource->buffer);
-
-   pipe_reference_init(&nresource->base.reference, 1);
+   rc = nvBufferCreateRw(&nresource->buffer, size, 0x1000, NvBufferKind_Generic_16BX2,
+      &nvnx_screen->gpu.addr_space);
    if (R_FAILED(rc)) {
       TRACE("Failed to create buffer (%d)\n", rc);
       FREE(nresource);
       return NULL;
    }
+
+   nvBufferMapAsTexture(&nresource->buffer, NvBufferKind_Generic_16BX2);
+   if (R_FAILED(rc)) {
+      TRACE("Failed to map buffer (%d)\n", rc);
+      FREE(nresource);
+      return NULL;
+   }
+
+   nresource->cpu_addr = nvBufferGetCpuAddr(&nresource->buffer);
+   nresource->gpu_addr = nvBufferGetGpuAddrTexture(&nresource->buffer);
+   memset(nresource->cpu_addr, 0x33, size);
+   armDCacheFlush(nresource->cpu_addr, size);
+   nvBufferMakeCpuUncached(&nresource->buffer);
+
+   pipe_reference_init(&nresource->base.reference, 1);
    return &nresource->base;
 }
 
@@ -135,7 +144,7 @@ static struct pipe_resource *nvnx_resource_from_handle(struct pipe_screen *scree
    struct nvnx_screen *nvnx_screen = (struct nvnx_screen*)screen;
    struct nvnx_resource *nresource;
    Result rc;
-   TRACE("Create resource from handle %d with offset %d\n", whandle->handle, whandle->offset);
+   TRACE("Create resource from handle %d with offset %d and stride %d\n", whandle->handle, whandle->offset, whandle->stride);
 
    nresource = CALLOC_STRUCT(nvnx_resource);
    if (!nresource)
@@ -146,15 +155,14 @@ static struct pipe_resource *nvnx_resource_from_handle(struct pipe_screen *scree
    nresource->base.screen = screen;
    rc = nvAddressSpaceMapBuffer(&nvnx_screen->gpu.addr_space, whandle->handle,
       NvBufferKind_Generic_16BX2, &nresource->gpu_addr);
-
-   nresource->gpu_addr += whandle->offset;
-
-   pipe_reference_init(&nresource->base.reference, 1);
    if (R_FAILED(rc)) {
       TRACE("Failed to create buffer (%d)\n", rc);
       FREE(nresource);
       return NULL;
    }
+
+   nresource->gpu_addr += whandle->offset;
+   pipe_reference_init(&nresource->base.reference, 1);
    return &nresource->base;
 }
 
@@ -267,14 +275,9 @@ static void nvnx_clear(struct pipe_context *ctx, unsigned buffers,
    CALLED();
    struct nvnx_screen *nxscreen = nvnx_screen(ctx);
    struct nvnx_context *nxctx = nvnx_context(ctx);
-   struct nvnx_resource *nxres = nvnx_resource(nxctx->framebuffer.cbufs[0]->texture);
-   if (!nxres) {
-      TRACE("Framebuffer incomplete!\n");
-      return;
-   }
 
-   vnClearBuffer(&nxscreen->vn, &nxres->buffer, nxctx->framebuffer.width,
-      nxctx->framebuffer.height, nvc0_format_table[nxres->base.format].rt, color->f);
+   vnClearBuffer(&nxscreen->vn, nxctx->framebuffer.width,
+      nxctx->framebuffer.height, color->f);
 }
 
 static void nvnx_clear_render_target(struct pipe_context *ctx,
