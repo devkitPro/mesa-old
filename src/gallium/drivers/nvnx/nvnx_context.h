@@ -17,6 +17,7 @@ struct nvnx_context {
    unsigned                      num_vtxbufs;
 
    VnViewportConfig              viewports[PIPE_MAX_VIEWPORTS];
+   VnRenderTargetConfig          targets[PIPE_MAX_COLOR_BUFS];
 };
 
 static struct nvnx_context *nvnx_context(struct pipe_context *ctx)
