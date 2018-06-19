@@ -350,13 +350,13 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	p_atomic_set(&nvbo->refcnt, 1);
 	bo->device = dev;
 	bo->handle = nvbo->buffer.fd;
-	bo->size = size;
+	bo->size = nvbo->buffer.size;
 	bo->flags = flags;
 	bo->offset = nvBufferGetGpuAddrTexture(&nvbo->buffer);
 	bo->map = nvBufferGetCpuAddr(&nvbo->buffer);
 	nvbo->map_handle = nvBufferGetGpuAddr(&nvbo->buffer);
-	memset(bo->map, 0, size);
-	armDCacheFlush(bo->map, size);
+	memset(bo->map, 0, bo->size);
+	armDCacheFlush(bo->map, bo->size);
 	nvBufferMakeCpuUncached(&nvbo->buffer);
 
 	if (config)
