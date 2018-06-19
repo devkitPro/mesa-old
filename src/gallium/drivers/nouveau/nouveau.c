@@ -303,7 +303,8 @@ nouveau_bo_del(struct nouveau_bo *bo)
 	CALLED();
 	struct nouveau_bo_priv *nvbo = nouveau_bo(bo);
 
-	nvBufferFree(&nvbo->buffer);
+	if (nvbo->buffer.has_init)
+		nvBufferFree(&nvbo->buffer);
 	free(nvbo);
 }
 
@@ -322,17 +323,14 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 	if (align == 0)
 		align = 0x1000;
 
-	NOUVEAU_DBG(MISC, "nouveau: Allocating BO of size %ld, align %x and flags %x\n", size, align, flags);
-
 	if (!nvbo)
 		return -ENOMEM;
 
 	// TODO: Read-only buffers?
 	NvBufferKind kind = NvBufferKind_Pitch;
 	if (config)
-	{
 		kind = (NvBufferKind)config->nvc0.memtype;
-	}
+	NOUVEAU_DBG(MISC, "nouveau: Allocating BO of size %ld, align %d, flags 0x%x and kind 0x%x\n", size, align, flags, kind);
 	rc = nvBufferCreateRw(&nvbo->buffer, size, align, kind, &nvdev->gpu.addr_space);
 	if (R_FAILED(rc))
 	{
@@ -341,20 +339,28 @@ nouveau_bo_new(struct nouveau_device *dev, uint32_t flags, uint32_t align,
 		return -rc;
 	}
 
+	rc = nvBufferMapAsTexture(&nvbo->buffer, kind);
+	if (R_FAILED(rc))
+	{
+		TRACE("Failed to map NvBuffer as texture (%d)\n", rc);
+		free(nvbo);
+		return -rc;
+	}
+
 	p_atomic_set(&nvbo->refcnt, 1);
 	bo->device = dev;
-	bo->flags = flags;
+	bo->handle = nvbo->buffer.fd;
 	bo->size = size;
-	bo->offset = nvBufferGetGpuAddr(&nvbo->buffer);
+	bo->flags = flags;
+	bo->offset = nvBufferGetGpuAddrTexture(&nvbo->buffer);
 	bo->map = nvBufferGetCpuAddr(&nvbo->buffer);
+	nvbo->map_handle = nvBufferGetGpuAddr(&nvbo->buffer);
 	memset(bo->map, 0, size);
 	armDCacheFlush(bo->map, size);
 	nvBufferMakeCpuUncached(&nvbo->buffer);
 
 	if (config)
-	{
 		bo->config = *config;
-	}
 	*pbo = bo;
 	return 0;
 }
@@ -386,8 +392,28 @@ int
 nouveau_bo_name_ref(struct nouveau_device *dev, uint32_t name,
 		    struct nouveau_bo **pbo)
 {
-	// TODO: Unimplemented
 	CALLED();
+	struct nouveau_device_priv *nvdev = nouveau_device(dev);
+	struct nouveau_bo_priv *nvbo = calloc(1, sizeof(*nvbo));
+	struct nouveau_bo *bo = &nvbo->base;
+	Result rc;
+
+	rc = nvAddressSpaceMapBuffer(&nvdev->gpu.addr_space, name,
+		NvBufferKind_Generic_16BX2, &bo->offset);
+	if (R_FAILED(rc))
+	{
+		TRACE("Failed to map named buffer (%d)\n", rc);
+		free(nvbo);
+		return -rc;
+	}
+
+	p_atomic_set(&nvbo->refcnt, 1);
+	bo->device = dev;
+	bo->handle = name;
+	*pbo = bo;
+
+	bo->config.nvc0.memtype = NvBufferKind_Generic_16BX2;
+	bo->config.nvc0.tile_mode = 0x040;
 	return 0;
 }
 
