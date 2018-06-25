@@ -440,7 +440,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     gfxInitDefault();
     gfxSetMode(GfxMode_TiledSingle);
 
-#if 1
+#if 0
     {
         struct sw_winsys *winsys;
         struct pipe_screen *screen;
