@@ -136,13 +136,7 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 
 	// Calculate the number of commands to submit
 	nvpb->cmd_list.num_cmds = push->cur - nvpb->ptr;
-	TRACE("Submitting push buffer with %d commands\n", nvpb->cmd_list.num_cmds);
-
-	// Dump the first buffer
-	static bool first_buf = true;
-	if (first_buf)
-		pushbuf_dump(nvpb->bgn, push->cur);
-	first_buf = false;
+	TRACE("Submitting push buffer with %ld commands\n", nvpb->cmd_list.num_cmds);
 
 	rc = nvGpfifoSubmit(&gpu->gpfifo, &nvpb->cmd_list, &fence);
 	if (R_FAILED(rc)) {
