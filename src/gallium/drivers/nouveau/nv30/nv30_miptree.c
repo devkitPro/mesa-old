@@ -463,7 +463,7 @@ nv30_miptree_from_handle(struct pipe_screen *pscreen,
                          struct winsys_handle *handle)
 {
    struct nv30_miptree *mt;
-   unsigned stride;
+   unsigned stride, offset;
 
    /* only supports 2D, non-mipmapped textures for the moment */
    if ((tmpl->target != PIPE_TEXTURE_2D &&
@@ -477,7 +477,7 @@ nv30_miptree_from_handle(struct pipe_screen *pscreen,
    if (!mt)
       return NULL;
 
-   mt->base.bo = nouveau_screen_bo_from_handle(pscreen, handle, &stride);
+   mt->base.bo = nouveau_screen_bo_from_handle(pscreen, handle, &stride, &offset);
    if (mt->base.bo == NULL) {
       FREE(mt);
       return NULL;
@@ -489,7 +489,7 @@ nv30_miptree_from_handle(struct pipe_screen *pscreen,
    mt->base.base.screen = pscreen;
    mt->uniform_pitch = stride;
    mt->level[0].pitch = mt->uniform_pitch;
-   mt->level[0].offset = 0;
+   mt->level[0].offset = offset;
 
    /* no need to adjust bo reference count */
    return &mt->base.base;

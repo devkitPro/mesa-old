@@ -90,17 +90,11 @@ nouveau_screen_fence_finish(struct pipe_screen *screen,
 struct nouveau_bo *
 nouveau_screen_bo_from_handle(struct pipe_screen *pscreen,
                               struct winsys_handle *whandle,
-                              unsigned *out_stride)
+                              unsigned *out_stride, unsigned *out_offset)
 {
    struct nouveau_device *dev = nouveau_screen(pscreen)->device;
    struct nouveau_bo *bo = 0;
    int ret;
-
-   if (whandle->offset != 0) {
-      debug_printf("%s: attempt to import unsupported winsys offset %d\n",
-                   __FUNCTION__, whandle->offset);
-      return NULL;
-   }
 
    if (whandle->type != DRM_API_HANDLE_TYPE_SHARED &&
        whandle->type != DRM_API_HANDLE_TYPE_FD) {
@@ -121,6 +115,7 @@ nouveau_screen_bo_from_handle(struct pipe_screen *pscreen,
    }
 
    *out_stride = whandle->stride;
+   *out_offset = whandle->offset;
    return bo;
 }
 
