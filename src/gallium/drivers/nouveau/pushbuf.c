@@ -154,9 +154,6 @@ pushbuf_submit(struct nouveau_pushbuf *push, struct nouveau_object *chan)
 		return -rc;
 	}
 
-	TRACE("Sleeping\n");
-	svcSleepThread(1000000000ull);
-
 	// TODO: Implicit fencing
 	return 0;
 }
@@ -168,6 +165,9 @@ pushbuf_flush(struct nouveau_pushbuf *push)
 	struct nouveau_pushbuf_priv *nvpb = nouveau_pushbuf(push);
 
 	int ret = pushbuf_submit(push, push->channel);
+
+	TRACE("Sleeping\n");
+	svcSleepThread(1000000000ull);
 
 	// Set the start for the next command buffer
 	push->cur = nvpb->bgn;
