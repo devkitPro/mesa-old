@@ -403,7 +403,7 @@ nv50_miptree_from_handle(struct pipe_screen *pscreen,
                          struct winsys_handle *whandle)
 {
    struct nv50_miptree *mt;
-   unsigned stride;
+   unsigned stride, offset;
 
    /* only supports 2D, non-mipmapped textures for the moment */
    if ((templ->target != PIPE_TEXTURE_2D &&
@@ -417,7 +417,7 @@ nv50_miptree_from_handle(struct pipe_screen *pscreen,
    if (!mt)
       return NULL;
 
-   mt->base.bo = nouveau_screen_bo_from_handle(pscreen, whandle, &stride);
+   mt->base.bo = nouveau_screen_bo_from_handle(pscreen, whandle, &stride, &offset);
    if (mt->base.bo == NULL) {
       FREE(mt);
       return NULL;
@@ -430,7 +430,7 @@ nv50_miptree_from_handle(struct pipe_screen *pscreen,
    pipe_reference_init(&mt->base.base.reference, 1);
    mt->base.base.screen = pscreen;
    mt->level[0].pitch = stride;
-   mt->level[0].offset = 0;
+   mt->level[0].offset = offset;
    mt->level[0].tile_mode = mt->base.bo->config.nv50.tile_mode;
 
    NOUVEAU_DRV_STAT(nouveau_screen(pscreen), tex_obj_current_count, 1);

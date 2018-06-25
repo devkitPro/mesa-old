@@ -132,7 +132,7 @@ nouveau_screen_bo_get_handle(struct pipe_screen *pscreen,
 struct nouveau_bo *
 nouveau_screen_bo_from_handle(struct pipe_screen *pscreen,
                               struct winsys_handle *whandle,
-                              unsigned *out_stride);
+                              unsigned *out_stride, unsigned *out_offset);
 
 
 int nouveau_screen_init(struct nouveau_screen *, struct nouveau_device *);
