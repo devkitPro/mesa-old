@@ -42,7 +42,7 @@
 #include "target-helpers/inline_sw_helper.h"
 #include "target-helpers/inline_debug_helper.h"
 
-#include "sw/null/null_sw_winsys.h"
+#include "sw/switch/switch_sw_winsys.h"
 #include "nouveau/switch/nouveau_switch_public.h"
 #include "nvnx/nvnx_public.h"
 
@@ -69,7 +69,7 @@
 #	define TRACE(x...)
 #  define CALLED()
 #endif
-#define ERROR(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)
+#define ERROR(x...) _eglLog(_EGL_FATAL, "egl_switch: " x)
 
 _EGL_DRIVER_STANDARD_TYPECASTS(switch_egl)
 
@@ -178,7 +178,6 @@ switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_fram
 
     pipe->transfer_unmap(pipe, transfer);
 #endif
-    gfxFlushBuffers();
     return TRUE;
 }
 
@@ -243,7 +242,7 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
                 res = screen->resource_from_handle(screen, &templat, &whandle, 0);
             else
                 res = screen->resource_create(screen, &templat);
-            pipe_reference(surface->textures[statts[i]], res);
+            pipe_reference(&surface->textures[statts[i]]->reference, &res->reference);
         }
         out[i] = res;
     }
@@ -480,6 +479,36 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     }
 
 #else
+    if ( dpy->Options.ForceSoftware )
+    {
+        struct sw_winsys *winsys;
+        struct pipe_screen *screen;
+
+        gfxSetMode(GfxMode_LinearDouble);
+
+        /* We use a switch software winsys since we always just render to ordinary
+        * driver resources.
+        */
+        TRACE("Initializing winsys\n");
+        winsys = switch_sw_create();
+        if (!winsys)
+            return EGL_FALSE;
+
+        /* Create llvmpipe or softpipe screen */
+        TRACE("Creating sw screen\n");
+        screen = sw_screen_create(winsys);
+        if (!screen)
+        {
+            _eglError(EGL_BAD_ALLOC, "sw_screen_create");
+            winsys->destroy(winsys);
+            return EGL_FALSE;
+        }
+
+        /* Inject optional trace, debug, etc. wrappers */
+        TRACE("Wrapping screen\n");
+        stmgr->screen = debug_screen_wrap(screen);
+    }
+    else
     {
        struct pipe_screen *screen;
 
@@ -594,6 +623,7 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
     struct switch_egl_surface* surface = (struct switch_egl_surface*)surf;
 
     TRACE("Swapping out buffers\n");
+    gfxFlushBuffers();
     gfxSwapBuffers();
 
     // Swap buffer attachments and invalidate framebuffer

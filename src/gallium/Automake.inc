@@ -88,3 +88,8 @@ GALLIUM_PIPE_LOADER_WINSYS_LIBS += \
 	$(top_builddir)/src/gallium/winsys/sw/kms-dri/libswkmsdri.la \
 	$(LIBDRM_LIBS)
 endif
+
+if HAVE_PLATFORM_SWITCH
+GALLIUM_PIPE_LOADER_WINSYS_LIBS += \
+	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la
+endif

@@ -3154,6 +3154,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/winsys/sw/dri/Makefile
                  src/gallium/winsys/sw/kms-dri/Makefile
                  src/gallium/winsys/sw/null/Makefile
+                 src/gallium/winsys/sw/switch/Makefile
                  src/gallium/winsys/sw/wrapper/Makefile
                  src/gallium/winsys/sw/xlib/Makefile
                  src/gallium/winsys/tegra/drm/Makefile

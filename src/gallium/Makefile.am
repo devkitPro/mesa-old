@@ -27,6 +27,7 @@ SUBDIRS += drivers/nouveau
 
 if HAVE_PLATFORM_SWITCH
 SUBDIRS += winsys/nouveau/switch
+SUBDIRS += winsys/sw/switch
 endif
 
 if HAVE_DRICOMMON
