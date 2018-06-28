@@ -512,6 +512,8 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     {
        struct pipe_screen *screen;
 
+       gfxConfigureTransform(0);
+
         /* Create nouveau screen */
        TRACE("Creating nouveau screen\n");
        screen = nouveau_switch_screen_create();
