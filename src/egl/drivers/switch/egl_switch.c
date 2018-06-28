@@ -118,9 +118,9 @@ switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
     struct st_visual stvis = {
         ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK,
         PIPE_FORMAT_RGBA8888_UNORM,
-        PIPE_FORMAT_NONE,
-        PIPE_FORMAT_NONE,
-        1,
+        PIPE_FORMAT_Z24_UNORM_S8_UINT,
+        PIPE_FORMAT_R16G16B16A16_FLOAT,
+        0,
         ST_ATTACHMENT_BACK_LEFT_MASK
     };
     *visual = stvis;
