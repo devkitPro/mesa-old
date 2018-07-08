@@ -938,8 +938,7 @@ dnl both compile and link-time arguments.
 dnl In practise that should be sufficient for all platforms, since any
 dnl platforms build with GCC and Clang support the flag.
 #PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
-PKG_CHECK_MODULES([PTHREAD], [libnx])
-PTHREAD_CFLAGS=-I$DEVKITPRO/libnx/include
+PKG_CHECK_MODULES([PTHREAD], [libpthread])
 
 dnl pthread-stubs is mandatory on some BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
@@ -2586,6 +2585,7 @@ if test -n "$with_gallium_drivers"; then
             ;;
         xnouveau)
             HAVE_GALLIUM_NOUVEAU=yes
+            PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
             #PKG_CHECK_MODULES([NOUVEAU], [libdrm >= $LIBDRM_NOUVEAU_REQUIRED libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
             #require_libdrm "nouveau"
             ;;
@@ -2950,8 +2950,8 @@ dnl Add user CFLAGS and CXXFLAGS
 CFLAGS="$CFLAGS $USER_CFLAGS"
 CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
 
-CFLAGS="$CFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE"
-CXXFLAGS="$CXXFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE"
+CFLAGS="$CFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE -I$DEVKITPRO/libnx/include"
+CXXFLAGS="$CXXFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE -I$DEVKITPRO/libnx/include"
 
 dnl Substitute the config
 AC_CONFIG_FILES([Makefile

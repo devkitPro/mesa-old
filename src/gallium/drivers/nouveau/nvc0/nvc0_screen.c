@@ -804,7 +804,6 @@ nvc0_screen_create(struct nouveau_device *dev)
    uint32_t flags;
    int ret;
    unsigned i;
-   debug_printf("nvc0_screen_create: CALLED\n");
 
    switch (dev->chipset & ~0xf) {
    case 0xc0:
@@ -1286,7 +1285,6 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    //nouveau_fence_new(&screen->base, &screen->base.fence.current); // TODO: Fencing
 
-   debug_printf("nvc0_screen_create: DONE\n");
    return &screen->base;
 
 fail:
