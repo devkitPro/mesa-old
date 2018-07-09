@@ -870,7 +870,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->fence.map = screen->fence.bo->map;
    screen->base.fence.emit = nvc0_screen_fence_emit;
    screen->base.fence.update = nvc0_screen_fence_update;
-
+#if 0 // TODO: Support queries
    ret = nouveau_object_new(chan, (dev->chipset < 0xe0) ? 0x1f906e : 0x906e,
                             NVIF_CLASS_SW_GF100, NULL, 0, &screen->nvsw);
    if (ret)
@@ -878,7 +878,7 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    BEGIN_NVC0(push, SUBC_SW(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->nvsw->handle);
-
+#endif
    switch (dev->chipset & ~0xf) {
    case 0x130:
    case 0x120:
