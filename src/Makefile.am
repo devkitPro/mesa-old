@@ -101,10 +101,6 @@ if HAVE_PLATFORM_WAYLAND
 SUBDIRS += egl/wayland/wayland-egl
 endif
 
-if HAVE_EGL
-SUBDIRS += egl
-endif
-
 # Requires wayland-drm
 if HAVE_RADEON_VULKAN
 SUBDIRS += amd/vulkan
@@ -112,6 +108,10 @@ endif
 
 if HAVE_GALLIUM
 SUBDIRS += gallium
+endif
+
+if HAVE_EGL
+SUBDIRS += egl
 endif
 
 EXTRA_DIST += \
