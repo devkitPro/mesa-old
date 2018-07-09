@@ -903,16 +903,16 @@ LIBS="$save_LIBS"
 
 AC_CHECK_FUNC([dl_iterate_phdr], [DEFINES="$DEFINES -DHAVE_DL_ITERATE_PHDR"])
 
-#case "$host_os" in
-#darwin*)
-#    ;;
-#*)
-#    AC_CHECK_FUNCS([clock_gettime], [CLOCK_LIB=],
-#                   [AC_CHECK_LIB([rt], [clock_gettime], [CLOCK_LIB=-lrt],
-#                                 [AC_MSG_ERROR([Could not find clock_gettime])])])
-#    AC_SUBST([CLOCK_LIB])
-#    ;;
-#esac
+case "$host_os" in
+darwin*)
+    ;;
+*)
+    AC_CHECK_FUNCS([clock_gettime], [CLOCK_LIB=],
+                   [AC_CHECK_LIB([rt], [clock_gettime], [CLOCK_LIB=-lrt],
+                                 [AC_MSG_ERROR([Could not find clock_gettime])])])
+    AC_SUBST([CLOCK_LIB])
+    ;;
+esac
 
 dnl See if posix_memalign is available
 AC_CHECK_FUNC([posix_memalign], [DEFINES="$DEFINES -DHAVE_POSIX_MEMALIGN"])
