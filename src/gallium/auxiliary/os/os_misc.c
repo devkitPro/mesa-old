@@ -102,7 +102,7 @@ os_log_message(const char *message)
       fflush(fout);
    }
 #else /* !PIPE_SUBSYSTEM_WINDOWS */
-#if defined(HAVE_SWITCH_PLATFORM)
+#if defined(PIPE_OS_SWITCH)
       svcOutputDebugString(message, strlen(message) + 1);
 #endif
    fflush(stdout);

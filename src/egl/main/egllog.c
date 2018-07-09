@@ -89,7 +89,7 @@ _eglDefaultLogger(EGLint level, const char *msg)
    };
    LOG_PRI(egl2alog[level], LOG_TAG, "%s", msg);
 #else
-#if defined(HAVE_SWITCH_PLATFORM)
+#if defined(__SWITCH__)
    svcOutputDebugString(msg, strlen(msg) + 1);
 #endif
    fprintf(stderr, "libEGL %s: %s\n", level_strings[level], msg);
