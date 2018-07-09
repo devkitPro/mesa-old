@@ -81,13 +81,13 @@ output_if_debug(const char *prefixString, const char *outputString,
          fprintf(LogFile, "\n");
       fflush(LogFile);
 
-#if defined(_WIN32) || defined(HAVE_SWITCH_PLATFORM)
-      /* stderr from windows applications without console is not usually 
-       * visible, so communicate with the debugger instead */ 
+#if defined(_WIN32) || defined(__SWITCH__)
+      /* stderr from windows applications without console is not usually
+       * visible, so communicate with the debugger instead */
       {
          char buf[4096];
          _mesa_snprintf(buf, sizeof(buf), "%s: %s%s", prefixString, outputString, newline ? "\n" : "");
-#ifdef HAVE_SWITCH_PLATFORM
+#ifdef __SWITCH__
          svcOutputDebugString(buf, sizeof(buf));
 #else
          OutputDebugStringA(buf);

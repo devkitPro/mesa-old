@@ -64,7 +64,7 @@ enum {
 #include "threads_win32.h"
 #elif defined(HAVE_PTHREAD)
 #include "threads_posix.h"
-#elif defined(HAVE_SWITCH_PLATFORM)
+#elif defined(__SWITCH__)
 #include "threads_libnx.h"
 #else
 #error Not supported on this platform.

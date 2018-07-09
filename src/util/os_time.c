@@ -28,7 +28,7 @@
 /**
  * @file
  * OS independent time-manipulation functions.
- * 
+ *
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
@@ -111,10 +111,8 @@ os_time_sleep(int64_t usecs)
    if (dwMilliseconds) {
       Sleep(dwMilliseconds);
    }
-#elif defined(HAVE_SWITCH_PLATFORM)
-
+#elif defined(PIPE_OS_SWITCH)
    svcSleepThread((u64)usecs * 1000);
-
 #else
 #  error Unsupported OS
 #endif
