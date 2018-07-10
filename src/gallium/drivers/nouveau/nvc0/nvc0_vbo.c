@@ -453,7 +453,7 @@ nvc0_vertex_arrays_validate(struct nvc0_context *nvc0)
       (vbo_mode != nvc0->state.vbo_mode);
 
    if (update_vertex) {
-      const unsigned n = MAX2(vertex->num_elements, nvc0->state.num_vtxelts);
+      const unsigned n = MAX3(vertex->num_elements, nvc0->state.num_vtxelts, 16);
 
       nvc0->state.constant_vbos = const_vbos;
       nvc0->state.constant_elts = 0;
