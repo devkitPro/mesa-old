@@ -3077,9 +3077,6 @@ dnl Add user CFLAGS and CXXFLAGS
 CFLAGS="$CFLAGS $USER_CFLAGS"
 CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
 
-CFLAGS="$CFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE -I$DEVKITPRO/libnx/include"
-CXXFLAGS="$CXXFLAGS -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE -I$DEVKITPRO/libnx/include"
-
 dnl Substitute the config
 AC_CONFIG_FILES([Makefile
                  src/Makefile
