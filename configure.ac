@@ -271,14 +271,14 @@ _SAVE_LDFLAGS="$LDFLAGS"
 _SAVE_CPPFLAGS="$CPPFLAGS"
 
 dnl Compiler macros
-DEFINES="-D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -D_GNU_SOURCE"
+DEFINES="-D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
 AC_SUBST([DEFINES])
 android=no
 case "$host_os" in
 *-android*)
     android=yes
     ;;
-linux*|*-gnu*|gnu*|cygwin*)
+linux*|*-gnu*|gnu*|cygwin*|elf*)
     DEFINES="$DEFINES -D_GNU_SOURCE"
     ;;
 solaris*)
@@ -943,7 +943,7 @@ PKG_CHECK_MODULES([PTHREAD], [libpthread])
 dnl pthread-stubs is mandatory on some BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
 case "$host_os" in
-linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd* | *-none*)
+linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd* | elf* )
     pthread_stubs_possible="no"
     ;;
 * )
@@ -951,9 +951,9 @@ linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd* | *-none*)
     ;;
 esac
 
-#if test "x$pthread_stubs_possible" = xyes; then
-#    PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
-#fi
+if test "x$pthread_stubs_possible" = xyes; then
+    PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
+fi
 
 dnl Check for futex for fast inline simple_mtx_t.
 AC_CHECK_HEADER([linux/futex.h], [DEFINES="$DEFINES -DHAVE_LINUX_FUTEX_H"])
