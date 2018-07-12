@@ -138,7 +138,7 @@ typedef void              *EGLNativeDisplayType;
 typedef khronos_uintptr_t  EGLNativePixmapType;
 typedef khronos_uintptr_t  EGLNativeWindowType;
 
-#elif defined(SWITCH)
+#elif defined(__SWITCH__)
 
 typedef void            *EGLNativeDisplayType;
 typedef khronos_uint8_t *EGLNativePixmapType;

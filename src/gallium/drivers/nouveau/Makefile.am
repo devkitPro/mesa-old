@@ -39,6 +39,7 @@ libnouveau_la_SOURCES = \
 	$(NVC0_CODEGEN_SOURCES) \
 	$(NVC0_C_SOURCES)
 
+if !HAVE_PLATFORM_SWITCH
 noinst_PROGRAMS = nouveau_compiler
 
 nodist_EXTRA_nouveau_compiler_SOURCES = dummy.cpp
@@ -50,5 +51,6 @@ nouveau_compiler_LDADD = \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(top_builddir)/src/util/libmesautil.la \
 	$(GALLIUM_COMMON_LIB_DEPS)
+endif
 
 EXTRA_DIST = codegen/lib nvc0/mme meson.build
