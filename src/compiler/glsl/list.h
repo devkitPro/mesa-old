@@ -647,14 +647,14 @@ inline void exec_node::insert_before(exec_list *before)
 #endif
 
 #define foreach_in_list(__type, __inst, __list)      \
-   for (__type *(__inst) = (__type *)(__list)->head_sentinel.next; \
-        !(__inst)->is_tail_sentinel();               \
-        (__inst) = (__type *)(__inst)->next)
+   for (__type *__inst = (__type *)(__list)->head_sentinel.next; \
+        !__inst->is_tail_sentinel();               \
+        __inst = (__type *)__inst->next)
 
 #define foreach_in_list_reverse(__type, __inst, __list)   \
-   for (__type *(__inst) = (__type *)(__list)->tail_sentinel.prev; \
-        !(__inst)->is_head_sentinel();                    \
-        (__inst) = (__type *)(__inst)->prev)
+   for (__type *__inst = (__type *)(__list)->tail_sentinel.prev; \
+        !__inst->is_head_sentinel();                    \
+        __inst = (__type *)__inst->prev)
 
 /**
  * This version is safe even if the current node is removed.
@@ -672,10 +672,10 @@ inline void exec_node::insert_before(exec_list *before)
         __node = __prev, __prev = (__type *)__prev->prev)
 
 #define foreach_in_list_use_after(__type, __inst, __list) \
-   __type *(__inst);                                      \
-   for ((__inst) = (__type *)(__list)->head_sentinel.next; \
-        !(__inst)->is_tail_sentinel();                    \
-        (__inst) = (__type *)(__inst)->next)
+   __type *__inst;                                      \
+   for (__inst = (__type *)(__list)->head_sentinel.next; \
+        !__inst->is_tail_sentinel();                    \
+        __inst = (__type *)__inst->next)
 /**
  * Iterate through two lists at once.  Stops at the end of the shorter list.
  *
