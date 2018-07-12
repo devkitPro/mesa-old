@@ -29,6 +29,33 @@
 #ifndef EMULATED_THREADS_H_INCLUDED_
 #define EMULATED_THREADS_H_INCLUDED_
 
+#ifdef __SWITCH__
+#include <threads.h>
+#include <limits.h>
+#include <sys/time.h>
+#include <switch/kernel/svc.h>
+
+/*-------------------- 7.25.7 Time functions --------------------*/
+// 7.25.6.1
+#ifndef HAVE_TIMESPEC_GET
+#define TIME_UTC 1
+
+static inline int
+timespec_get(struct timespec *ts, int base)
+{
+    if (!ts) return 0;
+    if (base == TIME_UTC) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        ts->tv_sec = tv.tv_sec;
+        ts->tv_nsec = tv.tv_usec * 1000;
+        return base;
+    }
+    return 0;
+}
+#endif
+
+#else
 #include <time.h>
 
 #ifndef TIME_UTC
@@ -64,12 +91,10 @@ enum {
 #include "threads_win32.h"
 #elif defined(HAVE_PTHREAD)
 #include "threads_posix.h"
-#elif defined(__SWITCH__)
-#include "threads_libnx.h"
 #else
 #error Not supported on this platform.
 #endif
-
+#endif
 
 
 #endif /* EMULATED_THREADS_H_INCLUDED_ */
