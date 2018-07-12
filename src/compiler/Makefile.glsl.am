@@ -54,7 +54,9 @@ check_PROGRAMS +=					\
 	glsl/tests/sampler-types-test			\
 	glsl/tests/uniform-initializer-test
 
+if !HAVE_PLATFORM_SWITCH
 noinst_PROGRAMS = glsl_compiler
+endif
 
 glsl_tests_blob_test_SOURCES =				\
 	glsl/tests/blob_test.c
@@ -146,12 +148,14 @@ glsl_libstandalone_la_LIBADD =				\
 	$(top_builddir)/src/util/libmesautil.la		\
 	$(PTHREAD_LIBS)
 
+if !HAVE_PLATFORM_SWITCH
 glsl_compiler_SOURCES = \
 	glsl/main.cpp
 
 glsl_compiler_LDADD = \
 	glsl/libstandalone.la \
 	$(CLOCK_LIB)
+endif
 
 glsl_glsl_test_SOURCES = \
 	glsl/test.cpp \

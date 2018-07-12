@@ -115,9 +115,9 @@ SUBDIRS += drivers/virgl winsys/virgl/drm winsys/virgl/vtest
 endif
 
 ## nvnx
-##if HAVE_GALLIUM_NVNX
+if HAVE_GALLIUM_NVNX
 SUBDIRS += drivers/nvnx
-##endif
+endif
 
 ## the sw winsys'
 SUBDIRS += winsys/sw/null

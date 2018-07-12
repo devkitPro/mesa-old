@@ -41,10 +41,8 @@ AM_CFLAGS = \
 	$(VISIBILITY_CFLAGS) \
 	$(LIBDRM_CFLAGS) \
 	$(EGL_CFLAGS) \
-    $(GALLIUM_CFLAGS) \
+	$(GALLIUM_CFLAGS) \
 	-D_EGL_NATIVE_PLATFORM=$(EGL_NATIVE_PLATFORM) \
-	-DSWITCH \
-	-DGALLIUM_SOFTPIPE \
 	-DGALLIUM_TRACE
 
 # Depending on whether libglvnd is enabled, we'll build the EGL library as
@@ -187,11 +185,20 @@ libEGL_mesa_la_LIBADD = \
 	libEGL_common.la \
 	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
 	$(top_builddir)/src/mesa/libmesagallium.la \
-	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
+	$(top_builddir)/src/gallium/auxiliary/libgallium.la
+if HAVE_PLATFORM_SWITCH
+libEGL_mesa_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la \
-	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la \
-	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la \
+	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la
+endif
+if HAVE_GALLIUM_SOFTPIPE
+libEGL_mesa_la_LIBADD += \
+	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
+endif
+if HAVE_GALLIUM_NVNX
+libEGL_mesa_la_LIBADD += \
 	$(top_builddir)/src/gallium/drivers/nvnx/libnvnx.la
+endif
 libEGL_mesa_la_LDFLAGS = \
 	-no-undefined \
 	-version-number 0 \
@@ -208,11 +215,20 @@ libEGL_la_LIBADD = \
 	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
 	$(top_builddir)/src/mesa/libmesagallium.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
+	$(top_builddir)/src/gallium/drivers/trace/libtrace.la
+if HAVE_PLATFORM_SWITCH
+libEGL_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la \
-	$(top_builddir)/src/gallium/drivers/trace/libtrace.la \
-	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la \
-	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la \
+	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la
+endif
+if HAVE_GALLIUM_SOFTPIPE
+libEGL_la_LIBADD += \
+	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
+endif
+if HAVE_GALLIUM_NVNX
+libEGL_la_LIBADD += \
 	$(top_builddir)/src/gallium/drivers/nvnx/libnvnx.la
+endif
 libEGL_la_LDFLAGS = \
 	-no-undefined \
 	-version-number 1:0 \
