@@ -151,10 +151,12 @@ do {                       \
 /* Used to optionally mark structures with misaligned elements or size as
  * packed, to trade off performance for space.
  */
+#ifndef PACKED
 #ifdef HAVE_FUNC_ATTRIBUTE_PACKED
 #define PACKED __attribute__((__packed__))
 #else
 #define PACKED
+#endif
 #endif
 
 /* Attribute pure is used for functions that have no effects other than their
