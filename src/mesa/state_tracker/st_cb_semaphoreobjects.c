@@ -67,7 +67,7 @@ st_import_semaphoreobj_fd(struct gl_context *ctx,
 
    pipe->create_fence_fd(pipe, &st_obj->fence, fd, PIPE_FD_TYPE_SYNCOBJ);
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__SWITCH__)
    /* We own fd, but we no longer need it. So get rid of it */
    close(fd);
 #endif
