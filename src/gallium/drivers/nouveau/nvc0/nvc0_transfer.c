@@ -605,7 +605,7 @@ nvc0_cb_bo_push(struct nouveau_context *nv,
 void
 nvc0_init_transfer_functions(struct nvc0_context *nvc0)
 {
-   if (nvc0->screen->base.class_3d == NVE4_3D_CLASS) {
+   if (nvc0->screen->base.class_3d >= NVE4_3D_CLASS) {
       nvc0->m2mf_copy_rect = nve4_m2mf_transfer_rect;
       nvc0->base.copy_data = nve4_m2mf_copy_linear;
       nvc0->base.push_data = nve4_p2mf_push_linear;
