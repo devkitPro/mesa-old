@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define SLAB_MAGIC_ALLOCATED 0xcafe4321
 #define SLAB_MAGIC_FREE 0x7ee01234
