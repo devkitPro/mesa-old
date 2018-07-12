@@ -602,23 +602,6 @@ nvc0_cb_bo_push(struct nouveau_context *nv,
    }
 }
 
-static void
-switch_copy_linear(struct nouveau_context *nv,
-                   struct nouveau_bo *dst, unsigned dstoff, unsigned dstdom,
-                   struct nouveau_bo *src, unsigned srcoff, unsigned srcdom,
-                   unsigned size)
-{
-   memcpy(dst->map + dstoff, src->map + srcoff, size);
-}
-
-static void
-switch_push_linear(struct nouveau_context *nv,
-                   struct nouveau_bo *dst, unsigned offset, unsigned domain,
-                   unsigned size, const void *data)
-{
-   memcpy(dst->map + offset, data, size);
-}
-
 void
 nvc0_init_transfer_functions(struct nvc0_context *nvc0)
 {
@@ -631,9 +614,5 @@ nvc0_init_transfer_functions(struct nvc0_context *nvc0)
       nvc0->base.copy_data = nvc0_m2mf_copy_linear;
       nvc0->base.push_data = nvc0_m2mf_push_linear;
    }
-#if 1
-   nvc0->base.copy_data = switch_copy_linear;
-   nvc0->base.push_data = switch_push_linear;
-#endif
    nvc0->base.push_cb = nvc0_cb_push;
 }
