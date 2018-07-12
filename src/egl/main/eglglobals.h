@@ -31,6 +31,7 @@
 #ifndef EGLGLOBALS_INCLUDED
 #define EGLGLOBALS_INCLUDED
 
+#include <assert.h>
 #include <stdbool.h>
 #include "c11/threads.h"
 

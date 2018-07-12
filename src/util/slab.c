@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define ALIGN(value, align) (((value) + (align) - 1) & ~((align) - 1))
 
