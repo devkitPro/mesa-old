@@ -36,6 +36,10 @@
 #include "context.h"
 #include "debug_output.h"
 
+#if defined(__SWITCH__)
+#include <switch/kernel/svc.h>
+#endif
+
 
 static FILE *LogFile = NULL;
 
