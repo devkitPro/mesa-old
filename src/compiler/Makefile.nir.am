@@ -60,24 +60,26 @@ spirv/vtn_gather_types.c: spirv/vtn_gather_types_c.py spirv/spirv.core.grammar.j
 	$(MKDIR_GEN)
 	$(PYTHON_GEN) $(srcdir)/spirv/vtn_gather_types_c.py $(srcdir)/spirv/spirv.core.grammar.json $@ || ($(RM) $@; false)
 
-#noinst_PROGRAMS += spirv2nir
+if !HAVE_PLATFORM_SWITCH
+noinst_PROGRAMS += spirv2nir
 
-#spirv2nir_SOURCES = \
-#	spirv/spirv2nir.c
+spirv2nir_SOURCES = \
+	spirv/spirv2nir.c
 
-#spirv2nir_CPPFLAGS =					\
-#	$(AM_CPPFLAGS)					\
-#	-I$(top_builddir)/src/compiler/nir		\
-#	-I$(top_srcdir)/src/compiler/nir		\
-#	-I$(top_srcdir)/src/compiler/spirv
+spirv2nir_CPPFLAGS =					\
+	$(AM_CPPFLAGS)					\
+	-I$(top_builddir)/src/compiler/nir		\
+	-I$(top_srcdir)/src/compiler/nir		\
+	-I$(top_srcdir)/src/compiler/spirv
 
-#spirv2nir_LDADD =					\
-#	nir/libnir.la					\
-#	$(top_builddir)/src/util/libmesautil.la		\
-#	-lm						\
-#	$(PTHREAD_LIBS)
+spirv2nir_LDADD =					\
+	nir/libnir.la					\
+	$(top_builddir)/src/util/libmesautil.la		\
+	-lm						\
+	$(PTHREAD_LIBS)
 
-#nodist_EXTRA_spirv2nir_SOURCES = dummy.cpp
+nodist_EXTRA_spirv2nir_SOURCES = dummy.cpp
+endif
 
 check_PROGRAMS += nir/tests/control_flow_tests
 
