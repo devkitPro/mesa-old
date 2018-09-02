@@ -55,6 +55,10 @@
 
 #endif /* HAVE_ANDROID_PLATFORM */
 
+#ifdef HAVE_SWITCH_PLATFORM
+#include <switch/kernel/svc.h>
+#endif
+
 #define MAXSTRING 1000
 #define FALLBACK_LOG_LEVEL _EGL_WARNING
 
@@ -93,7 +97,7 @@ _eglDefaultLogger(EGLint level, const char *msg)
    };
    LOG_PRI(egl2alog[level], LOG_TAG, "%s", msg);
 #else
-#if defined(__SWITCH__)
+#if defined(HAVE_SWITCH_PLATFORM)
    svcOutputDebugString(msg, strlen(msg) + 1);
 #endif
    fprintf(stderr, "libEGL %s: %s\n", level_strings[level], msg);

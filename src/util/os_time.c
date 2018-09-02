@@ -52,6 +52,10 @@
 #  error Unsupported OS
 #endif
 
+#if defined(PIPE_OS_SWITCH)
+#  include <switch/kernel/svc.h>
+#endif
+
 
 int64_t
 os_time_get_nano(void)

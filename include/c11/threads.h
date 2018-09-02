@@ -33,7 +33,6 @@
 #include <threads.h>
 #include <limits.h>
 #include <sys/time.h>
-#include <switch/kernel/svc.h>
 
 /*-------------------- 7.25.7 Time functions --------------------*/
 // 7.25.6.1
