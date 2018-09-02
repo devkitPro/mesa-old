@@ -77,9 +77,6 @@ struct switch_egl_display
 {
     struct st_manager *stmgr;
     struct st_api *stapi;
-
-    u32 nvhostctrl;
-    Handle VsyncEvent;
 };
 
 struct switch_egl_config
@@ -484,8 +481,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         struct sw_winsys *winsys;
         struct pipe_screen *screen;
 
-        gfxSetMode(GfxMode_LinearDouble);
-
         /* We use a switch software winsys since we always just render to ordinary
         * driver resources.
         */
@@ -512,7 +507,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     {
        struct pipe_screen *screen;
 
-       gfxConfigureTransform(0);
+       gfxSetMode(GfxMode_TiledDouble);
 
         /* Create nouveau screen */
        TRACE("Creating nouveau screen\n");
@@ -625,7 +620,6 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
     struct switch_egl_surface* surface = (struct switch_egl_surface*)surf;
 
     TRACE("Swapping out buffers\n");
-    gfxFlushBuffers();
     gfxSwapBuffers();
 
     // Swap buffer attachments and invalidate framebuffer
@@ -633,9 +627,6 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
     surface->textures[ST_ATTACHMENT_BACK_LEFT] = surface->textures[ST_ATTACHMENT_FRONT_LEFT];
     surface->textures[ST_ATTACHMENT_FRONT_LEFT] = old_back;
     p_atomic_inc(&surface->stfbi->stamp);
-
-    TRACE("Wait for V-Sync event\n");
-    gfxWaitForVsync();
     return EGL_TRUE;
 }
 
