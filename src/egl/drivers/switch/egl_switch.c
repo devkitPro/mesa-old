@@ -239,8 +239,9 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
                 res = screen->resource_from_handle(screen, &templat, &whandle, 0);
             else
                 res = screen->resource_create(screen, &templat);
-            pipe_reference(&surface->textures[statts[i]]->reference, &res->reference);
+            surface->textures[statts[i]] = res;
         }
+        pipe_reference(&out[i]->reference, &res->reference);
         out[i] = res;
     }
 
