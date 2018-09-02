@@ -53,6 +53,7 @@ nouveau_switch_screen_create(void)
 		goto err;
 
 	switch (dev->chipset & ~0xf) {
+#if 0
 	case 0x30:
 	case 0x40:
 	case 0x60:
@@ -64,6 +65,7 @@ nouveau_switch_screen_create(void)
 	case 0xa0:
 		init = nv50_screen_create;
 		break;
+#endif
 	case 0xc0:
 	case 0xd0:
 	case 0xe0:
