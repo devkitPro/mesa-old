@@ -632,6 +632,16 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 }
 
 
+/*
+ * Called from eglGetProcAddress() via drv->API.GetProcAddress().
+ */
+static _EGLProc
+switch_get_proc_address(_EGLDriver *drv, const char *procname)
+{
+    return _glapi_get_proc_address(procname);
+}
+
+
 /**
  * This is the main entrypoint into the driver, called by libEGL.
  * Create a new _EGLDriver object and init its dispatch table.
@@ -657,6 +667,7 @@ _eglBuiltInDriver(void)
     driver->API.CreatePixmapSurface = switch_create_pixmap_surface;
     driver->API.CreatePbufferSurface = switch_create_pbuffer_surface;
     driver->API.DestroySurface = switch_destroy_surface;
+    driver->API.GetProcAddress = switch_get_proc_address;
 
     driver->API.SwapBuffers = switch_swap_buffers;
 
