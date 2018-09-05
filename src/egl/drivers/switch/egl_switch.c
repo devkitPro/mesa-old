@@ -61,6 +61,8 @@
 #include "state_tracker/st_gl_api.h"
 #include "state_tracker/drm_driver.h"
 
+#include "mapi/glapi/glapi.h"
+
 
 #ifdef DEBUG
 #	define TRACE(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)
@@ -373,7 +375,7 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
     _eglSetConfigKey(&conf->base, EGL_NATIVE_RENDERABLE, EGL_TRUE); // Let's say yes
     _eglSetConfigKey(&conf->base, EGL_NATIVE_VISUAL_ID, 0); // No visual
     _eglSetConfigKey(&conf->base, EGL_NATIVE_VISUAL_TYPE, EGL_NONE); // No visual
-    _eglSetConfigKey(&conf->base, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES_BIT);
+    _eglSetConfigKey(&conf->base, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT | EGL_OPENGL_ES_BIT);
     _eglSetConfigKey(&conf->base, EGL_SAMPLE_BUFFERS, 0); // TODO: How to get the right value ?
     _eglSetConfigKey(&conf->base, EGL_SAMPLES, _eglGetConfigKey(&conf->base, EGL_SAMPLE_BUFFERS) == 0 ? 0 : 0);
     _eglSetConfigKey(&conf->base, EGL_DEPTH_SIZE, 24); // TODO: How to get the right value ?
@@ -562,7 +564,19 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
 
     struct st_context_attribs attribs;
     memset(&attribs, 0, sizeof(attribs));
-    attribs.profile = ST_PROFILE_OPENGL_ES2;
+    switch (_eglGetCurrentThread()->CurrentAPI) {
+        case EGL_OPENGL_API:
+            attribs.profile = ST_PROFILE_OPENGL_CORE;
+            attribs.major = 3;
+            attribs.minor = 2;
+            break;
+        case EGL_OPENGL_ES_API:
+            attribs.profile = ST_PROFILE_OPENGL_ES2;
+            break;
+        default:
+            _eglError(EGL_BAD_CONFIG, "switch_create_context");
+            goto cleanup;
+    }
     switch_fill_st_visual(&attribs.visual, conf);
 
     enum st_context_error error;
