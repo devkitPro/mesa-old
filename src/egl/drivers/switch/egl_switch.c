@@ -633,7 +633,10 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
     CALLED();
     struct switch_egl_surface* surface = (struct switch_egl_surface*)surf;
+    struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
 
+    TRACE("Flushing context\n");
+    context->stctx->flush(context->stctx, 0, NULL);
     TRACE("Swapping out buffers\n");
     gfxSwapBuffers();
 
