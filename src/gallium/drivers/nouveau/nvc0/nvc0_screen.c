@@ -996,9 +996,9 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    BEGIN_NVC0(push, SUBC_M2MF(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->m2mf->oclass);
-   if (screen->m2mf->oclass == NVE4_P2MF_CLASS) {
+   if (screen->m2mf->oclass >= NVE4_P2MF_CLASS) {
       BEGIN_NVC0(push, SUBC_COPY(NV01_SUBCHAN_OBJECT), 1);
-      PUSH_DATA (push, 0xa0b5);
+      PUSH_DATA (push, screen->m2mf->oclass >= NVF0_P2MF_CLASS ? 0xb0b5 : 0xa0b5);
    }
 
    ret = nouveau_object_new(chan, 0xbeef902d, NVC0_2D_CLASS, NULL, 0,
