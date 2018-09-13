@@ -432,6 +432,8 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     dpy->DriverData = display;
     dpy->Version = 14;
 
+    dpy->Extensions.KHR_create_context = EGL_TRUE;
+
     stmgr = CALLOC_STRUCT(st_manager);
     if (!stmgr) {
         _eglError(EGL_BAD_ALLOC, "switch_initialize");
@@ -564,14 +566,65 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
 
     struct st_context_attribs attribs;
     memset(&attribs, 0, sizeof(attribs));
-    switch (_eglGetCurrentThread()->CurrentAPI) {
+    
+    attribs.major = context->base.ClientMajorVersion;
+    attribs.minor = context->base.ClientMinorVersion;
+
+    switch (eglQueryAPI()) {
         case EGL_OPENGL_API:
-            attribs.profile = ST_PROFILE_OPENGL_CORE;
-            attribs.major = 3;
-            attribs.minor = 2;
+            switch (context->base.Profile) {
+                case EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR:
+                    /* There are no profiles before OpenGL 3.2.  The
+                     * EGL_KHR_create_context spec says:
+                     *
+                     *     "If the requested OpenGL version is less than 3.2,
+                     *      EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR is ignored and the functionality
+                     *      of the context is determined solely by the requested version.."
+                     */
+
+                    if (attribs.major > 3 || (attribs.major == 3 && attribs.minor >= 2)) {
+                        attribs.profile = ST_PROFILE_OPENGL_CORE;
+                        break;
+                    }
+                    /* fall-through */
+                case EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT_KHR:
+                    /*
+                     * The spec also says:
+                     *
+                     *     "If version 3.1 is requested, the context returned may implement
+                     *     any of the following versions:
+                     *
+                     *       * Version 3.1. The GL_ARB_compatibility extension may or may not
+                     *         be implemented, as determined by the implementation.
+                     *       * The core profile of version 3.2 or greater."
+                     *
+                     * and because Mesa doesn't support GL_ARB_compatibility, the only chance to
+                     * honour a 3.1 context is through core profile.
+                     */
+                    if (attribs.major == 3 && attribs.minor == 1) {
+                        attribs.profile = ST_PROFILE_OPENGL_CORE;
+                    } else {
+                        attribs.profile = ST_PROFILE_DEFAULT;
+                    }
+                    break;
+                default:
+                    _eglError(EGL_BAD_CONFIG, "switch_create_context");
+                    goto cleanup;
+            }
             break;
         case EGL_OPENGL_ES_API:
-            attribs.profile = ST_PROFILE_OPENGL_ES2;
+            switch (context->base.ClientMajorVersion) {
+            case 1:
+                attribs.profile = ST_PROFILE_OPENGL_ES1;
+                break;
+            case 2:
+            case 3: // ST_PROFILE_OPENGL_ES2 is used for OpenGL ES 3.x too
+                attribs.profile = ST_PROFILE_OPENGL_ES2;
+                break;
+            default:
+                _eglError(EGL_BAD_CONFIG, "switch_create_context");
+                goto cleanup;
+            }
             break;
         default:
             _eglError(EGL_BAD_CONFIG, "switch_create_context");
