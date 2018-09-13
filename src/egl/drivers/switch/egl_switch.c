@@ -675,7 +675,8 @@ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
 {
     struct switch_egl_display* disp = switch_egl_display(dpy);
     struct switch_egl_context* cont = switch_egl_context(ctx);
-    struct switch_egl_surface* surf = switch_egl_surface(dsurf);
+    struct switch_egl_surface* draw_surf = switch_egl_surface(dsurf);
+    struct switch_egl_surface* read_surf = switch_egl_surface(rsurf);
     CALLED();
 
     _EGLContext *old_ctx;
@@ -684,7 +685,8 @@ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
     if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
         return EGL_FALSE;
 
-    return disp->stapi->make_current(disp->stapi, cont->stctx, surf->stfbi, surf->stfbi);
+    return disp->stapi->make_current(disp->stapi, cont ? cont->stctx : NULL, 
+        draw_surf ? draw_surf->stfbi : NULL, read_surf ? read_surf->stfbi : NULL);
 }
 
 static EGLBoolean
