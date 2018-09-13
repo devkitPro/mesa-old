@@ -439,6 +439,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         dpy->ClientAPIs |= EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
 
     dpy->Extensions.KHR_create_context = EGL_TRUE;
+    dpy->Extensions.KHR_surfaceless_context = EGL_TRUE;
   
     stmgr = CALLOC_STRUCT(st_manager);
     if (!stmgr) {
