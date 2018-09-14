@@ -635,7 +635,7 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
     enum st_context_error error;
     context->stctx = display->stapi->create_context(display->stapi, display->stmgr, &attribs, &error, NULL);
     if (error != ST_CONTEXT_SUCCESS) {
-        _eglError(EGL_BAD_ATTRIBUTE, "switch_create_context");
+        _eglError(EGL_BAD_MATCH, "switch_create_context");
         goto cleanup;
     }
 
