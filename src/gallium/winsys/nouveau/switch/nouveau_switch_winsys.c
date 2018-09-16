@@ -10,6 +10,7 @@
 #include "nouveau_switch_public.h"
 #include "nouveau_winsys.h"
 #include "nouveau_screen.h"
+#include "nouveau_buffer.h"
 #include "nouveau_drm.h"
 
 #include <nvif/class.h>
@@ -99,4 +100,11 @@ err:
 	}
 	mtx_unlock(&nouveau_screen_mutex);
 	return NULL;
+}
+
+PUBLIC int
+nouveau_switch_resource_get_syncpoint(struct pipe_resource *resource, unsigned int *out_threshold)
+{
+	struct nv04_resource* priv = nv04_resource(resource);
+	return nouveau_bo_get_syncpoint(priv->bo, out_threshold);
 }
