@@ -98,6 +98,8 @@ struct switch_egl_surface
     struct st_framebuffer_iface *stfbi;
     struct st_visual stvis;
     struct pipe_resource *textures[ST_ATTACHMENT_COUNT];
+    NvFence fences[2];
+    bool fence_swap;
 };
 
 struct switch_framebuffer
@@ -292,6 +294,8 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     fb->surface = surface;
     surface->stfbi = &fb->base;
     surface->base.SwapInterval = 1;
+    surface->fences[0].id = UINT32_MAX;
+    surface->fences[1].id = UINT32_MAX;
 
     switch_fill_st_visual(&surface->stvis, conf);
 
@@ -694,16 +698,32 @@ static EGLBoolean
 switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
     CALLED();
-    struct switch_egl_surface* surface = (struct switch_egl_surface*)surf;
+    struct switch_egl_surface* surface = switch_egl_surface(surf);
     struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
 
     TRACE("Flushing context\n");
-    context->stctx->flush(context->stctx, 0, NULL);
+    context->stctx->flush(context->stctx, ST_FLUSH_END_OF_FRAME, NULL);
+
+    NvFence fence;
+    struct pipe_resource *old_back = surface->textures[ST_ATTACHMENT_BACK_LEFT];
+    fence.id = nouveau_switch_resource_get_syncpoint(old_back, &fence.value);
+    if ((int)fence.id >= 0) {
+        NvFence* surf_fence = &surface->fences[surface->fence_swap];
+        if (surf_fence->id != fence.id || surf_fence->value != fence.value) {
+            TRACE("Appending fence: {%d,%u}\n", (int)fence.id, fence.value);
+            *surf_fence = fence;
+
+            NvMultiFence mf;
+            nvMultiFenceCreate(&mf, &fence);
+            gfxAppendFence(&mf);
+        }
+    }
+
     TRACE("Swapping out buffers\n");
     gfxSwapBuffers();
 
     // Swap buffer attachments and invalidate framebuffer
-    struct pipe_resource *old_back = surface->textures[ST_ATTACHMENT_BACK_LEFT];
+    surface->fence_swap = !surface->fence_swap;
     surface->textures[ST_ATTACHMENT_BACK_LEFT] = surface->textures[ST_ATTACHMENT_FRONT_LEFT];
     surface->textures[ST_ATTACHMENT_FRONT_LEFT] = old_back;
     p_atomic_inc(&surface->stfbi->stamp);
