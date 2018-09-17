@@ -526,24 +526,7 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
                     }
                     /* fall-through */
                 case EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT_KHR:
-                    /*
-                     * The spec also says:
-                     *
-                     *     "If version 3.1 is requested, the context returned may implement
-                     *     any of the following versions:
-                     *
-                     *       * Version 3.1. The GL_ARB_compatibility extension may or may not
-                     *         be implemented, as determined by the implementation.
-                     *       * The core profile of version 3.2 or greater."
-                     *
-                     * and because Mesa doesn't support GL_ARB_compatibility, the only chance to
-                     * honour a 3.1 context is through core profile.
-                     */
-                    if (attribs.major == 3 && attribs.minor == 1) {
-                        attribs.profile = ST_PROFILE_OPENGL_CORE;
-                    } else {
-                        attribs.profile = ST_PROFILE_DEFAULT;
-                    }
+                    attribs.profile = ST_PROFILE_DEFAULT;
                     break;
                 default:
                     _eglError(EGL_BAD_CONFIG, "switch_create_context");
