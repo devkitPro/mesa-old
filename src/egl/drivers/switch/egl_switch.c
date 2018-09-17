@@ -116,13 +116,14 @@ switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
 {
     CALLED();
     // TODO: Create the visual from the config
-    struct st_visual stvis = {
-        ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK,
-        PIPE_FORMAT_RGBA8888_UNORM,
-        PIPE_FORMAT_Z24_UNORM_S8_UINT,
-        PIPE_FORMAT_R16G16B16A16_FLOAT,
-        0,
-        ST_ATTACHMENT_BACK_LEFT_MASK
+    static const struct st_visual stvis = {
+        .no_config            = false,
+        .buffer_mask          = ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK,
+        .color_format         = PIPE_FORMAT_RGBA8888_UNORM,
+        .depth_stencil_format = PIPE_FORMAT_Z24_UNORM_S8_UINT,
+        .accum_format         = PIPE_FORMAT_R16G16B16A16_FLOAT,
+        .samples              = 0,
+        .render_buffer        = ST_ATTACHMENT_BACK_LEFT_MASK
     };
     *visual = stvis;
 }
@@ -374,7 +375,7 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
     _eglSetConfigKey(&conf->base, EGL_CONFIG_ID, 1);
     _eglSetConfigKey(&conf->base, EGL_BIND_TO_TEXTURE_RGB, EGL_FALSE);
     _eglSetConfigKey(&conf->base, EGL_BIND_TO_TEXTURE_RGBA, EGL_FALSE);
-    _eglSetConfigKey(&conf->base, EGL_STENCIL_SIZE, 0);
+    _eglSetConfigKey(&conf->base, EGL_STENCIL_SIZE, 8);
     _eglSetConfigKey(&conf->base, EGL_TRANSPARENT_TYPE, EGL_NONE);
     _eglSetConfigKey(&conf->base, EGL_NATIVE_RENDERABLE, EGL_TRUE); // Let's say yes
     _eglSetConfigKey(&conf->base, EGL_NATIVE_VISUAL_ID, 0); // No visual
