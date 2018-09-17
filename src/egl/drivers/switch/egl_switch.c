@@ -44,7 +44,6 @@
 
 #include "sw/switch/switch_sw_winsys.h"
 #include "nouveau/switch/nouveau_switch_public.h"
-#include "nvnx/nvnx_public.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
@@ -144,42 +143,7 @@ static boolean
 switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    enum st_attachment_type statt)
 {
-    // TODO: FLush front buffer changes somehow.
-#if 0
-    struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
-    struct pipe_context *pipe = stctx->pipe;
-    struct pipe_resource *res = surface->textures[statt];
-    struct pipe_transfer *transfer = NULL;
-    struct pipe_box box;
-    void *map;
-    ubyte *src, *dst;
-    unsigned y, bytes, bpp, width;
-    int dst_stride;
-    CALLED();
-
-    u_box_2d(0, 0, res->width0, res->height0, &box);
-
-    map = pipe->transfer_map(pipe, res, 0, PIPE_TRANSFER_READ, &box,
-                            &transfer);
-
-    /*
-    * Copy the color buffer from the resource to the user's buffer.
-    */
-    bpp = util_format_get_blocksize(surface->stvis.color_format);
-    src = map;
-    dst = gfxGetFramebuffer(&width, NULL);
-    dst_stride = bpp * width;
-    bytes = bpp * res->width0;
-
-    for (y = 0; y < res->height0; y++) {
-      memcpy(dst, src, bytes);
-      armDCacheFlush(dst, bytes);
-      dst += dst_stride;
-      src += transfer->stride;
-    }
-
-    pipe->transfer_unmap(pipe, transfer);
-#endif
+    // TODO: Figure out if we need to implement this at all.
     return TRUE;
 }
 
@@ -456,43 +420,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     gfxInitDefault();
 
-#if 0
-    {
-        struct sw_winsys *winsys;
-        struct pipe_screen *screen;
-
-        /* We use a null software winsys since we always just render to ordinary
-        * driver resources.
-        */
-        TRACE("Initializing winsys\n");
-        winsys = null_sw_create();
-        if (!winsys)
-            return EGL_FALSE;
-
-        /* Create llvmpipe or softpipe screen */
-        TRACE("Creating sw screen\n");
-        screen = sw_screen_create(winsys);
-        if (!screen)
-        {
-            _eglError(EGL_BAD_ALLOC, "sw_screen_create");
-            winsys->destroy(winsys);
-            return EGL_FALSE;
-        }
-
-        if ( dpy->Options.ForceSoftware )
-        {
-            /* Inject optional trace, debug, etc. wrappers */
-            TRACE("Wrapping screen\n");
-            stmgr->screen = debug_screen_wrap(screen);
-        }
-        else
-        {
-            TRACE("Wrapping screen with nx\n");
-            stmgr->screen = nvnx_screen_create(screen);
-        }
-    }
-
-#else
     if ( dpy->Options.ForceSoftware )
     {
         struct sw_winsys *winsys;
@@ -539,7 +466,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
        TRACE("Wrapping screen\n");
        stmgr->screen = debug_screen_wrap(screen);
     }
-#endif
 
     display->stmgr = stmgr;
     display->stapi = st_gl_api_create();

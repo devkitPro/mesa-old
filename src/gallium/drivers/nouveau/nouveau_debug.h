@@ -13,7 +13,7 @@
 #define NOUVEAU_DEBUG_PROG_CFLOW 0x0800
 #define NOUVEAU_DEBUG_PROG_ALL   0x1f00
 
-#define NOUVEAU_DEBUG 1
+#define NOUVEAU_DEBUG 0
 
 #define NOUVEAU_ERR(fmt, args...)                                 \
    debug_printf("%s:%d - " fmt, __FUNCTION__, __LINE__, ##args)

@@ -2816,9 +2816,6 @@ if test -n "$with_gallium_drivers"; then
                 require_basic_egl "virgl"
             fi
             ;;
-        xnvnx)
-            HAVE_GALLIUM_NVNX=yes
-            ;;
         *)
             AC_MSG_ERROR([Unknown Gallium driver: $driver])
             ;;
@@ -2962,7 +2959,6 @@ AM_CONDITIONAL(HAVE_GALLIUM_SWRAST, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes -o \
 AM_CONDITIONAL(HAVE_GALLIUM_V3D, test "x$HAVE_GALLIUM_V3D" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VC4, test "x$HAVE_GALLIUM_VC4" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VIRGL, test "x$HAVE_GALLIUM_VIRGL" = xyes)
-AM_CONDITIONAL(HAVE_GALLIUM_NVNX, test "x$HAVE_GALLIUM_NVNX" = xyes)
 
 AM_CONDITIONAL(HAVE_GALLIUM_STATIC_TARGETS, test "x$enable_shared_pipe_drivers" = xno)
 
@@ -3106,7 +3102,6 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/drivers/v3d/Makefile
                  src/gallium/drivers/vc4/Makefile
                  src/gallium/drivers/virgl/Makefile
-                 src/gallium/drivers/nvnx/Makefile
                  src/gallium/state_trackers/clover/Makefile
                  src/gallium/state_trackers/dri/Makefile
                  src/gallium/state_trackers/glx/xlib/Makefile

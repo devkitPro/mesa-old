@@ -204,10 +204,6 @@ if HAVE_GALLIUM_SOFTPIPE
 libEGL_mesa_la_LIBADD += \
 	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
 endif
-if HAVE_GALLIUM_NVNX
-libEGL_mesa_la_LIBADD += \
-	$(top_builddir)/src/gallium/drivers/nvnx/libnvnx.la
-endif
 libEGL_mesa_la_LDFLAGS = \
 	-no-undefined \
 	-version-number 0 \
@@ -232,10 +228,6 @@ endif
 if HAVE_GALLIUM_SOFTPIPE
 libEGL_la_LIBADD += \
 	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
-endif
-if HAVE_GALLIUM_NVNX
-libEGL_la_LIBADD += \
-	$(top_builddir)/src/gallium/drivers/nvnx/libnvnx.la
 endif
 libEGL_la_LDFLAGS = \
 	-no-undefined \
