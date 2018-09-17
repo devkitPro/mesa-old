@@ -43,8 +43,7 @@ AM_CFLAGS = \
 	$(LIBDRM_CFLAGS) \
 	$(EGL_CFLAGS) \
 	$(GALLIUM_CFLAGS) \
-	-D_EGL_NATIVE_PLATFORM=$(EGL_NATIVE_PLATFORM) \
-	-DGALLIUM_TRACE
+	-D_EGL_NATIVE_PLATFORM=$(EGL_NATIVE_PLATFORM)
 
 # Depending on whether libglvnd is enabled, we'll build the EGL library as
 # either libEGL.so.1 or libEGL_mesa.so.0. Using an automake substitution
@@ -224,8 +223,7 @@ libEGL_la_LIBADD = \
 	libEGL_common.la \
 	$(top_builddir)/src/mapi/shared-glapi/libglapi.la \
 	$(top_builddir)/src/mesa/libmesagallium.la \
-	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
-	$(top_builddir)/src/gallium/drivers/trace/libtrace.la
+	$(top_builddir)/src/gallium/auxiliary/libgallium.la
 if HAVE_PLATFORM_SWITCH
 libEGL_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la \
