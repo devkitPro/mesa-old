@@ -54,7 +54,7 @@ check_PROGRAMS +=					\
 	glsl/tests/uniform-initializer-test
 
 if !HAVE_PLATFORM_SWITCH
-	noinst_PROGRAMS += glsl_compiler
+noinst_PROGRAMS += glsl_compiler
 endif
 
 glsl_tests_blob_test_SOURCES =				\
