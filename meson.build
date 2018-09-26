@@ -569,8 +569,6 @@ elif not (with_gallium_r600 or with_gallium_radeonsi or with_gallium_nouveau)
   else
     _va = 'false'
   endif
-elif _va == 'auto'
-  _va = 'true'
 endif
 with_gallium_va = false
 dep_va = null_dep
@@ -791,9 +789,12 @@ foreach a : ['-Wall', '-Werror=implicit-function-declaration',
     c_args += a
   endif
 endforeach
-if cc.has_argument('-Wmissing-field-initializers')
-  c_args += '-Wno-missing-field-initializers'
-endif
+
+foreach a : ['missing-field-initializers', 'format-truncation']
+  if cc.has_argument('-W' + a)
+    c_args += '-Wno-' + a
+  endif
+endforeach
 
 c_vis_args = []
 if cc.has_argument('-fvisibility=hidden')
@@ -812,7 +813,7 @@ endforeach
 # For some reason, the test for -Wno-foo always succeeds with gcc, even if the
 # option is not supported. Hence, check for -Wfoo instead.
 
-foreach a : ['non-virtual-dtor', 'missing-field-initializers']
+foreach a : ['non-virtual-dtor', 'missing-field-initializers', 'format-truncation']
   if cpp.has_argument('-W' + a)
     cpp_args += '-Wno-' + a
   endif
@@ -1070,6 +1071,13 @@ pre_args += '-DHAVE_ZLIB'
 dep_thread = dependency('threads')
 if dep_thread.found() and host_machine.system() != 'windows'
   pre_args += '-DHAVE_PTHREAD'
+  if cc.has_function(
+      'pthread_setaffinity_np',
+      dependencies : dep_thread,
+      prefix : '#include <pthread.h>',
+      args : '-D_GNU_SOURCE')
+    pre_args += '-DHAVE_PTHREAD_SETAFFINITY'
+  endif
 endif
 if with_amd_vk or with_gallium_radeonsi or with_gallium_r600 or with_gallium_opencl
   dep_elf = dependency('libelf', required : false)
@@ -1181,27 +1189,24 @@ else
   _llvm_version = '>= 3.3.0'
 endif
 
+_shared_llvm = get_option('shared-llvm')
+
 _llvm = get_option('llvm')
-if _llvm == 'auto'
+dep_llvm = null_dep
+with_llvm = false
+if _llvm != 'false'
   dep_llvm = dependency(
     'llvm',
     version : _llvm_version,
     modules : llvm_modules,
     optional_modules : llvm_optional_modules,
-    required : with_amd_vk or with_gallium_radeonsi or with_gallium_swr or with_gallium_opencl,
+    required : (
+      with_amd_vk or with_gallium_radeonsi or with_gallium_swr or
+      with_gallium_opencl or _llvm == 'true'
+    ),
+    static : not _shared_llvm,
   )
   with_llvm = dep_llvm.found()
-elif _llvm == 'true'
-  dep_llvm = dependency(
-    'llvm',
-    version : _llvm_version,
-    modules : llvm_modules,
-    optional_modules : llvm_optional_modules,
-  )
-  with_llvm = true
-else
-  dep_llvm = null_dep
-  with_llvm = false
 endif
 if with_llvm
   _llvm_version = dep_llvm.version().split('.')

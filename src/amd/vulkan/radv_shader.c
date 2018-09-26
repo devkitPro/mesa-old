@@ -210,7 +210,9 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.image_write_without_format = true,
 				.tessellation = true,
 				.int64 = true,
+				.int16 = true,
 				.multiview = true,
+				.subgroup_arithmetic = true,
 				.subgroup_ballot = true,
 				.subgroup_basic = true,
 				.subgroup_quad = true,
@@ -313,6 +315,8 @@ radv_shader_compile_to_nir(struct radv_device *device,
 			.lower_shuffle_to_32bit = 1,
 			.lower_vote_eq_to_ballot = 1,
 		});
+
+	nir_lower_load_const_to_scalar(nir);
 
 	if (!(flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT))
 		radv_optimize_nir(nir, false);

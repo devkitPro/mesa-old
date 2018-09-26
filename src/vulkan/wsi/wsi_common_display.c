@@ -1197,8 +1197,7 @@ wsi_display_wait_for_event(struct wsi_display *wsi,
 
 static VkResult
 wsi_display_acquire_next_image(struct wsi_swapchain *drv_chain,
-                               uint64_t timeout,
-                               VkSemaphore semaphore,
+                               const VkAcquireNextImageInfoKHR *info,
                                uint32_t *image_index)
 {
    struct wsi_display_swapchain *chain =
@@ -1211,6 +1210,7 @@ wsi_display_acquire_next_image(struct wsi_swapchain *drv_chain,
    if (chain->status != VK_SUCCESS)
       return chain->status;
 
+   uint64_t timeout = info->timeout;
    if (timeout != 0 && timeout != UINT64_MAX)
       timeout = wsi_rel_to_abs_time(timeout);
 
@@ -1297,7 +1297,7 @@ wsi_display_crtc_solo(struct wsi_display *wsi,
  * which is currently idle.
  */
 static uint32_t
-wsi_display_select_crtc(struct wsi_display_connector *connector,
+wsi_display_select_crtc(const struct wsi_display_connector *connector,
                         drmModeResPtr mode_res,
                         drmModeConnectorPtr drm_connector)
 {
@@ -1712,6 +1712,10 @@ wsi_display_surface_create_swapchain(
 
    VkResult result = wsi_swapchain_init(wsi_device, &chain->base, device,
                                         create_info, allocator);
+   if (result != VK_SUCCESS) {
+      vk_free(allocator, chain);
+      return result;
+   }
 
    chain->base.destroy = wsi_display_swapchain_destroy;
    chain->base.get_wsi_image = wsi_display_get_wsi_image;

@@ -109,6 +109,23 @@ genX(cmd_buffer_mi_memcpy)(struct anv_cmd_buffer *cmd_buffer,
 }
 
 void
+genX(cmd_buffer_mi_memset)(struct anv_cmd_buffer *cmd_buffer,
+                           struct anv_address dst, uint32_t value,
+                           uint32_t size)
+{
+   /* This memset operates in units of dwords. */
+   assert(size % 4 == 0);
+   assert(dst.offset % 4 == 0);
+
+   for (uint32_t i = 0; i < size; i += 4) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = anv_address_add(dst, i);
+         sdi.ImmediateData = value;
+      }
+   }
+}
+
+void
 genX(cmd_buffer_so_memcpy)(struct anv_cmd_buffer *cmd_buffer,
                            struct anv_address dst, struct anv_address src,
                            uint32_t size)
@@ -120,10 +137,8 @@ genX(cmd_buffer_so_memcpy)(struct anv_cmd_buffer *cmd_buffer,
    assert(src.offset + size <= src.bo->size);
 
    /* The maximum copy block size is 4 32-bit components at a time. */
-   unsigned bs = 16;
-   bs = gcd_pow2_u64(bs, src.offset);
-   bs = gcd_pow2_u64(bs, dst.offset);
-   bs = gcd_pow2_u64(bs, size);
+   assert(size % 4 == 0);
+   unsigned bs = gcd_pow2_u64(16, size);
 
    enum isl_format format;
    switch (bs) {
