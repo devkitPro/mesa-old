@@ -490,6 +490,11 @@ switch_terminate(_EGLDriver* drv, _EGLDisplay* dpy)
     struct switch_egl_display *display = switch_egl_display(dpy);
     CALLED();
 
+    /* Release all non-current Context/Surfaces. */
+    _eglReleaseDisplayResources(drv, dpy);
+
+    _eglCleanupDisplay(dpy);
+
     display->stapi->destroy(display->stapi);
 
     display->stmgr->screen->destroy(display->stmgr->screen);
@@ -617,8 +622,20 @@ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
     if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
         return EGL_FALSE;
 
-    return disp->stapi->make_current(disp->stapi, cont ? cont->stctx : NULL, 
+    EGLBoolean ret = disp->stapi->make_current(disp->stapi, cont ? cont->stctx : NULL,
         draw_surf ? draw_surf->stfbi : NULL, read_surf ? read_surf->stfbi : NULL);
+
+    if (old_ctx) {
+        if (old_dsurf) {
+            switch_destroy_surface(drv, dpy, old_dsurf);
+        }
+        if (old_rsurf) {
+            switch_destroy_surface(drv, dpy, old_rsurf);
+        }
+        switch_destroy_context(drv, dpy, old_ctx);
+    }
+
+    return ret;
 }
 
 static EGLBoolean
