@@ -210,7 +210,9 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
                 res = screen->resource_create(screen, &templat);
             surface->textures[statts[i]] = res;
         }
-        pipe_reference(&out[i]->reference, &res->reference);
+        if (pipe_reference(&out[i]->reference, &res->reference)) {
+            screen->resource_destroy(screen, out[i]);
+        }
         out[i] = res;
     }
 
@@ -302,11 +304,20 @@ switch_create_pbuffer_surface(_EGLDriver *drv, _EGLDisplay *disp,
 static EGLBoolean
 switch_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
+    enum st_attachment_type i;
+    struct switch_egl_surface* surface = switch_egl_surface(surf);
+    struct pipe_screen *screen = surface->stfbi->state_manager->screen;
     CALLED();
 
     if (_eglPutSurface(surf)) {
+        for (i = 0; i < ST_ATTACHMENT_COUNT; i ++) {
+            if (pipe_reference(&surface->textures[i]->reference, NULL)) {
+                screen->resource_destroy(screen, surface->textures[i]);
+            }
+        }
         // XXX: detach switch_egl_surface::gl from the native window and destroy it
-        free(surf);
+        free(surface->stfbi);
+        free(surface);
     }
     return EGL_TRUE;
 }
@@ -476,10 +487,16 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 static EGLBoolean
 switch_terminate(_EGLDriver* drv, _EGLDisplay* dpy)
 {
+    struct switch_egl_display *display = switch_egl_display(dpy);
     CALLED();
 
+    display->stapi->destroy(display->stapi);
+
+    display->stmgr->screen->destroy(display->stmgr->screen);
+    free(display->stmgr);
+
     gfxExit();
-    free(dpy);
+    free(display);
 
     return EGL_TRUE;
 }
