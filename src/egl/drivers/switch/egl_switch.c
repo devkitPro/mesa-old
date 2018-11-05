@@ -429,6 +429,10 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     stmgr->get_param = switch_st_get_param;
 
+    // enable resolutions >720p in docked mode,
+    // see https://switchbrew.github.io/libnx/gfx_8h_source.html
+    gfxInitResolutionDefault(); 
+
     gfxInitDefault();
 
     if ( dpy->Options.ForceSoftware )
