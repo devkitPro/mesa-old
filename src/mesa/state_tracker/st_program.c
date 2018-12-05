@@ -554,6 +554,7 @@ st_create_vp_variant(struct st_context *st,
    vpv->tgsi.stream_output = stvp->tgsi.stream_output;
    vpv->num_inputs = stvp->num_inputs;
 
+#ifndef __SWITCH__
    if (stvp->tgsi.type == PIPE_SHADER_IR_NIR) {
       vpv->tgsi.type = PIPE_SHADER_IR_NIR;
       vpv->tgsi.ir.nir = nir_shader_clone(NULL, stvp->tgsi.ir.nir);
@@ -572,6 +573,7 @@ st_create_vp_variant(struct st_context *st,
       vpv->tgsi.ir.nir = NULL;
       return vpv;
    }
+#endif
 
    vpv->tgsi.tokens = tgsi_dup_tokens(stvp->tgsi.tokens);
 
@@ -649,11 +651,13 @@ bool
 st_translate_fragment_program(struct st_context *st,
                               struct st_fragment_program *stfp)
 {
+#ifndef __SWITCH__
    /* We have already compiled to NIR so just return */
    if (stfp->shader_program) {
       st_store_ir_in_disk_cache(st, &stfp->Base, true);
       return true;
    }
+#endif
 
    ubyte outputMapping[2 * FRAG_RESULT_MAX];
    ubyte inputMapping[VARYING_SLOT_MAX];
@@ -1027,6 +1031,7 @@ st_create_fp_variant(struct st_context *st,
    if (!variant)
       return NULL;
 
+#ifndef __SWITCH__
    if (stfp->tgsi.type == PIPE_SHADER_IR_NIR) {
       tgsi.type = PIPE_SHADER_IR_NIR;
       tgsi.ir.nir = nir_shader_clone(NULL, stfp->tgsi.ir.nir);
@@ -1108,6 +1113,7 @@ st_create_fp_variant(struct st_context *st,
 
       return variant;
    }
+#endif
 
    tgsi.tokens = stfp->tgsi.tokens;
 
@@ -1475,6 +1481,7 @@ st_translate_geometry_program(struct st_context *st,
 {
    struct ureg_program *ureg;
 
+#ifndef __SWITCH__
    /* We have already compiled to NIR so just return */
    if (stgp->shader_program) {
       /* No variants */
@@ -1484,6 +1491,7 @@ st_translate_geometry_program(struct st_context *st,
       st_store_ir_in_disk_cache(st, &stgp->Base, true);
       return true;
    }
+#endif
 
    ureg = ureg_create_with_screen(PIPE_SHADER_GEOMETRY, st->pipe->screen);
    if (ureg == NULL)
@@ -1535,9 +1543,11 @@ st_get_basic_variant(struct st_context *st,
       if (v) {
 
 	 if (prog->tgsi.type == PIPE_SHADER_IR_NIR) {
+#ifndef __SWITCH__
 	    tgsi.type = PIPE_SHADER_IR_NIR;
 	    tgsi.ir.nir = nir_shader_clone(NULL, prog->tgsi.ir.nir);
             tgsi.stream_output = prog->tgsi.stream_output;
+#endif
 	 } else
 	    tgsi = prog->tgsi;
          /* fill in new variant */
@@ -1578,6 +1588,7 @@ st_translate_tessctrl_program(struct st_context *st,
 {
    struct ureg_program *ureg;
 
+#ifndef __SWITCH__
    /* We have already compiled to NIR so just return */
    if (sttcp->shader_program) {
       /* No variants */
@@ -1586,6 +1597,7 @@ st_translate_tessctrl_program(struct st_context *st,
       st_store_ir_in_disk_cache(st, &sttcp->Base, true);
       return true;
    }
+#endif
 
    ureg = ureg_create_with_screen(PIPE_SHADER_TESS_CTRL, st->pipe->screen);
    if (ureg == NULL)
@@ -1612,6 +1624,7 @@ st_translate_tesseval_program(struct st_context *st,
 {
    struct ureg_program *ureg;
 
+#ifndef __SWITCH__
    /* We have already compiled to NIR so just return */
    if (sttep->shader_program) {
       /* No variants */
@@ -1621,6 +1634,7 @@ st_translate_tesseval_program(struct st_context *st,
       st_store_ir_in_disk_cache(st, &sttep->Base, true);
       return true;
    }
+#endif
 
    ureg = ureg_create_with_screen(PIPE_SHADER_TESS_EVAL, st->pipe->screen);
    if (ureg == NULL)
@@ -1667,6 +1681,7 @@ st_translate_compute_program(struct st_context *st,
 
    stcp->tgsi.req_local_mem = stcp->Base.info.cs.shared_size;
 
+#ifndef __SWITCH__
    if (stcp->shader_program) {
       /* no compute variants: */
       st_finalize_nir(st, &stcp->Base, stcp->shader_program,
@@ -1674,6 +1689,7 @@ st_translate_compute_program(struct st_context *st,
       st_store_ir_in_disk_cache(st, &stcp->Base, true);
       return true;
    }
+#endif
 
    ureg = ureg_create_with_screen(PIPE_SHADER_COMPUTE, st->pipe->screen);
    if (ureg == NULL)
@@ -1720,8 +1736,10 @@ st_get_cp_variant(struct st_context *st,
       if (v) {
          /* fill in new variant */
          struct pipe_compute_state cs = *tgsi;
+#ifndef __SWITCH__
          if (tgsi->ir_type == PIPE_SHADER_IR_NIR)
             cs.prog = nir_shader_clone(NULL, tgsi->prog);
+#endif
          v->driver_shader = pipe->create_compute_state(pipe, &cs);
          v->key = key;
 

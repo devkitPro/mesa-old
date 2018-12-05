@@ -80,6 +80,10 @@ st_serialise_ir_program(struct gl_context *ctx, struct gl_program *prog,
    struct blob blob;
    blob_init(&blob);
 
+#ifdef __SWITCH__
+   nir = false;
+#endif
+
    switch (prog->info.stage) {
    case MESA_SHADER_VERTEX: {
       struct st_vertex_program *stvp = (struct st_vertex_program *) prog;
@@ -198,6 +202,10 @@ st_deserialise_ir_program(struct gl_context *ctx,
       ctx->Const.ShaderCompilerOptions[prog->info.stage].NirOptions;
 
    assert(prog->driver_cache_blob && prog->driver_cache_blob_size > 0);
+
+#ifdef __SWITCH__
+   nir = false;
+#endif
 
    struct blob_reader blob_reader;
    blob_reader_init(&blob_reader, buffer, size);

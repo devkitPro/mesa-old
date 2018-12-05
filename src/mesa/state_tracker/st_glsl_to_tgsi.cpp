@@ -7306,7 +7306,12 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    enum pipe_shader_ir preferred_ir = (enum pipe_shader_ir)
       pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX,
                                 PIPE_SHADER_CAP_PREFERRED_IR);
+
+#ifndef __SWITCH__
    bool use_nir = preferred_ir == PIPE_SHADER_IR_NIR;
+#else
+   const bool use_nir = false;
+#endif
 
    /* Return early if we are loading the shader from on-disk cache */
    if (st_load_ir_from_disk_cache(ctx, prog, use_nir)) {
