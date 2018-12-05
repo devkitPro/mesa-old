@@ -328,6 +328,35 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
    return intel_alloc_private_renderbuffer_storage(ctx, rb, internalFormat, width, height);
 }
 
+static mesa_format
+fallback_rgbx_to_rgba(struct intel_screen *screen, struct gl_renderbuffer *rb,
+                      mesa_format original_format)
+{
+   mesa_format format = original_format;
+
+   /* The base format and internal format must be derived from the user-visible
+    * format (that is, the gl_config's format), even if we internally use
+    * choose a different format for the renderbuffer. Otherwise, rendering may
+    * use incorrect channel write masks.
+    */
+   rb->_BaseFormat = _mesa_get_format_base_format(original_format);
+   rb->InternalFormat = rb->_BaseFormat;
+
+   if (!screen->mesa_format_supports_render[original_format]) {
+      /* The glRenderbufferStorage paths in core Mesa detect if the driver
+       * does not support the user-requested format, and then searches for
+       * a fallback format. The DRI code bypasses core Mesa, though. So we do
+       * the fallbacks here.
+       *
+       * We must support MESA_FORMAT_R8G8B8X8 on Android because the Android
+       * framework requires HAL_PIXEL_FORMAT_RGBX8888 winsys surfaces.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(original_format);
+      assert(screen->mesa_format_supports_render[format]);
+   }
+   return format;
+}
+
 static void
 intel_image_target_renderbuffer_storage(struct gl_context *ctx,
 					struct gl_renderbuffer *rb,
@@ -350,8 +379,13 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
       return;
    }
 
+   rb->Format = fallback_rgbx_to_rgba(brw->screen, rb, image->format);
+
+   mesa_format chosen_format = rb->Format == image->format ?
+      image->format : rb->Format;
+
    /* __DRIimage is opaque to the core so it has to be checked here */
-   if (!brw->mesa_format_supports_render[image->format]) {
+   if (!brw->mesa_format_supports_render[chosen_format]) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
             "glEGLImageTargetRenderbufferStorage(unsupported image format)");
       return;
@@ -366,15 +400,12 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
     * content.
     */
    irb->mt = intel_miptree_create_for_dri_image(brw, image, GL_TEXTURE_2D,
-                                                image->format, false);
+                                                rb->Format, false);
    if (!irb->mt)
       return;
 
-   rb->InternalFormat = image->internal_format;
    rb->Width = image->width;
    rb->Height = image->height;
-   rb->Format = image->format;
-   rb->_BaseFormat = _mesa_get_format_base_format(image->format);
    rb->NeedsFinishRenderTexture = true;
    irb->layer_count = 1;
 }
@@ -436,27 +467,7 @@ intel_create_winsys_renderbuffer(struct intel_screen *screen,
    rb->NumSamples = num_samples;
    rb->NumStorageSamples = num_samples;
 
-   /* The base format and internal format must be derived from the user-visible
-    * format (that is, the gl_config's format), even if we internally use
-    * choose a different format for the renderbuffer. Otherwise, rendering may
-    * use incorrect channel write masks.
-    */
-   rb->_BaseFormat = _mesa_get_format_base_format(format);
-   rb->InternalFormat = rb->_BaseFormat;
-
-   rb->Format = format;
-   if (!screen->mesa_format_supports_render[rb->Format]) {
-      /* The glRenderbufferStorage paths in core Mesa detect if the driver
-       * does not support the user-requested format, and then searches for
-       * a falback format. The DRI code bypasses core Mesa, though. So we do
-       * the fallbacks here.
-       *
-       * We must support MESA_FORMAT_R8G8B8X8 on Android because the Android
-       * framework requires HAL_PIXEL_FORMAT_RGBX8888 winsys surfaces.
-       */
-      rb->Format = _mesa_format_fallback_rgbx_to_rgba(rb->Format);
-      assert(screen->mesa_format_supports_render[rb->Format]);
-   }
+   rb->Format = fallback_rgbx_to_rgba(screen, rb, format);
 
    /* intel-specific methods */
    rb->Delete = intel_delete_renderbuffer;
@@ -618,7 +629,7 @@ intel_render_texture(struct gl_context * ctx,
 }
 
 
-#define fbo_incomplete(fb, ...) do {                                          \
+#define fbo_incomplete(fb, error_id, ...) do {                                          \
       static GLuint msg_id = 0;                                               \
       if (unlikely(ctx->Const.ContextFlags & GL_CONTEXT_FLAG_DEBUG_BIT)) {    \
          _mesa_gl_debug(ctx, &msg_id,                                         \
@@ -628,7 +639,7 @@ intel_render_texture(struct gl_context * ctx,
                         __VA_ARGS__);                                         \
       }                                                                       \
       DBG(__VA_ARGS__);                                                       \
-      fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;                               \
+      fb->_Status = error_id;                                                 \
    } while (0)
 
 /**
@@ -682,7 +693,7 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
              d_depth != s_depth ||
              depthRb->mt_level != stencilRb->mt_level ||
 	     depthRb->mt_layer != stencilRb->mt_layer) {
-	    fbo_incomplete(fb,
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
                            "FBO incomplete: depth and stencil must match in"
                            "width, height, depth, LOD and layer\n");
 	 }
@@ -694,7 +705,7 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	  */
 	 if (depthRb->mt_level != stencilRb->mt_level ||
 	     depthRb->mt_layer != stencilRb->mt_layer) {
-	    fbo_incomplete(fb,
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
                            "FBO incomplete: depth image level/layer %d/%d != "
                            "stencil image %d/%d\n",
                            depthRb->mt_level,
@@ -704,13 +715,14 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	 }
       } else {
 	 if (!brw->has_separate_stencil) {
-	    fbo_incomplete(fb, "FBO incomplete: separate stencil "
-                           "unsupported\n");
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                      "FBO incomplete: separate stencil unsupported\n");
 	 }
 	 if (stencil_mt->format != MESA_FORMAT_S_UINT8) {
-	    fbo_incomplete(fb, "FBO incomplete: separate stencil is %s "
-                           "instead of S8\n",
-                           _mesa_get_format_name(stencil_mt->format));
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                      "FBO incomplete: separate stencil is %s "
+                      "instead of S8\n",
+                      _mesa_get_format_name(stencil_mt->format));
 	 }
 	 if (devinfo->gen < 7 && !intel_renderbuffer_has_hiz(depthRb)) {
 	    /* Before Gen7, separate depth and stencil buffers can be used
@@ -719,8 +731,8 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	     *     [DevSNB]: This field must be set to the same value (enabled
 	     *     or disabled) as Hierarchical Depth Buffer Enable.
 	     */
-	    fbo_incomplete(fb, "FBO incomplete: separate stencil "
-                           "without HiZ\n");
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                          "FBO incomplete: separate stencil without HiZ\n");
 	 }
       }
    }
@@ -738,29 +750,39 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
        */
       rb = fb->Attachment[i].Renderbuffer;
       if (rb == NULL) {
-	 fbo_incomplete(fb, "FBO incomplete: attachment without "
-                        "renderbuffer\n");
+	 fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                       "FBO incomplete: attachment without "
+                       "renderbuffer\n");
 	 continue;
       }
 
       if (fb->Attachment[i].Type == GL_TEXTURE) {
 	 if (rb->TexImage->Border) {
-	    fbo_incomplete(fb, "FBO incomplete: texture with border\n");
+	    fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                      "FBO incomplete: texture with border\n");
 	    continue;
 	 }
       }
 
       irb = intel_renderbuffer(rb);
       if (irb == NULL) {
-	 fbo_incomplete(fb, "FBO incomplete: software rendering "
-                        "renderbuffer\n");
+	 fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                   "FBO incomplete: software rendering renderbuffer\n");
 	 continue;
       }
 
+     if (rb->Format == MESA_FORMAT_R_SRGB8) {
+        fbo_incomplete(fb, GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+                       "FBO incomplete: Format not color renderable: %s\n",
+                       _mesa_get_format_name(rb->Format));
+        continue;
+     }
+
       if (!brw_render_target_supported(brw, rb)) {
-	 fbo_incomplete(fb, "FBO incomplete: Unsupported HW "
-                        "texture/renderbuffer format attached: %s\n",
-                        _mesa_get_format_name(intel_rb_format(irb)));
+	 fbo_incomplete(fb, GL_FRAMEBUFFER_UNSUPPORTED,
+                   "FBO incomplete: Unsupported HW "
+                   "texture/renderbuffer format attached: %s\n",
+                   _mesa_get_format_name(intel_rb_format(irb)));
       }
    }
 }
@@ -968,11 +990,9 @@ intel_renderbuffer_move_to_temp(struct brw_context *brw,
 void
 brw_cache_sets_clear(struct brw_context *brw)
 {
-   struct hash_entry *render_entry;
    hash_table_foreach(brw->render_cache, render_entry)
       _mesa_hash_table_remove(brw->render_cache, render_entry);
 
-   struct set_entry *depth_entry;
    set_foreach(brw->depth_cache, depth_entry)
       _mesa_set_remove(brw->depth_cache, depth_entry);
 }

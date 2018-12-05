@@ -47,8 +47,6 @@ remove_from_ht(struct hash_table *ht, void *key)
 static void
 v3d_job_free(struct v3d_context *v3d, struct v3d_job *job)
 {
-        struct set_entry *entry;
-
         set_foreach(job->bos, entry) {
                 struct v3d_bo *bo = (struct v3d_bo *)entry->key;
                 v3d_bo_unreference(&bo);
@@ -57,8 +55,6 @@ v3d_job_free(struct v3d_context *v3d, struct v3d_job *job)
         remove_from_ht(v3d->jobs, &job->key);
 
         if (job->write_prscs) {
-                struct set_entry *entry;
-
                 set_foreach(job->write_prscs, entry) {
                         const struct pipe_resource *prsc = entry->key;
 
@@ -175,7 +171,6 @@ v3d_flush_jobs_reading_resource(struct v3d_context *v3d,
 
         v3d_flush_jobs_writing_resource(v3d, prsc);
 
-        struct hash_entry *entry;
         hash_table_foreach(v3d->jobs, entry) {
                 struct v3d_job *job = entry->data;
 
@@ -227,7 +222,7 @@ v3d_job_set_tile_buffer_size(struct v3d_job *job)
 /**
  * Returns a v3d_job struture for tracking V3D rendering to a particular FBO.
  *
- * If we've already started rendering to this FBO, then return old same job,
+ * If we've already started rendering to this FBO, then return the same job,
  * otherwise make a new one.  If we're beginning rendering to an FBO, make
  * sure that any previous reads of the FBO (or writes to its color/Z surfaces)
  * have been flushed.
@@ -351,7 +346,6 @@ v3d_clif_dump(struct v3d_context *v3d, struct v3d_job *job)
                                                 stderr,
                                                 V3D_DEBUG & V3D_DEBUG_CL);
 
-        struct set_entry *entry;
         set_foreach(job->bos, entry) {
                 struct v3d_bo *bo = (void *)entry->key;
                 char *name = ralloc_asprintf(NULL, "%s_0x%x",
@@ -412,11 +406,7 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
         if (!(V3D_DEBUG & V3D_DEBUG_NORAST)) {
                 int ret;
 
-#ifndef USE_V3D_SIMULATOR
-                ret = drmIoctl(v3d->fd, DRM_IOCTL_V3D_SUBMIT_CL, &job->submit);
-#else
-                ret = v3d_simulator_flush(v3d, &job->submit, job);
-#endif
+                ret = v3d_ioctl(v3d->fd, DRM_IOCTL_V3D_SUBMIT_CL, &job->submit);
                 static bool warned = false;
                 if (ret && !warned) {
                         fprintf(stderr, "Draw call returned %s.  "

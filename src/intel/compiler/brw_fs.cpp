@@ -396,6 +396,25 @@ fs_inst::can_do_source_mods(const struct gen_device_info *devinfo)
 }
 
 bool
+fs_inst::can_do_cmod()
+{
+   if (!backend_instruction::can_do_cmod())
+      return false;
+
+   /* The accumulator result appears to get used for the conditional modifier
+    * generation.  When negating a UD value, there is a 33rd bit generated for
+    * the sign in the accumulator value, so now you can't check, for example,
+    * equality with a 32-bit value.  See piglit fs-op-neg-uvec4.
+    */
+   for (unsigned i = 0; i < sources; i++) {
+      if (type_is_unsigned_int(src[i].type) && src[i].negate)
+         return false;
+   }
+
+   return true;
+}
+
+bool
 fs_inst::can_change_types() const
 {
    return dst.type == src[0].type &&
@@ -2412,16 +2431,16 @@ fs_visitor::opt_algebraic()
          break;
 
       case BRW_OPCODE_MUL:
-	 if (inst->src[1].file != IMM)
-	    continue;
+         if (inst->src[1].file != IMM)
+            continue;
 
-	 /* a * 1.0 = a */
-	 if (inst->src[1].is_one()) {
-	    inst->opcode = BRW_OPCODE_MOV;
-	    inst->src[1] = reg_undef;
-	    progress = true;
-	    break;
-	 }
+         /* a * 1.0 = a */
+         if (inst->src[1].is_one()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
 
          /* a * -1.0 = -a */
          if (inst->src[1].is_negative_one()) {
@@ -2449,7 +2468,7 @@ fs_visitor::opt_algebraic()
             progress = true;
             break;
          }
-	 break;
+         break;
       case BRW_OPCODE_ADD:
          if (inst->src[1].file != IMM)
             continue;
@@ -6004,6 +6023,12 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          case BRW_REGISTER_TYPE_UD:
             fprintf(file, "%uu", inst->src[i].ud);
             break;
+         case BRW_REGISTER_TYPE_Q:
+            fprintf(file, "%" PRId64 "q", inst->src[i].d64);
+            break;
+         case BRW_REGISTER_TYPE_UQ:
+            fprintf(file, "%" PRIu64 "uq", inst->src[i].u64);
+            break;
          case BRW_REGISTER_TYPE_VF:
             fprintf(file, "[%-gF, %-gF, %-gF, %-gF]",
                     brw_vf_to_float((inst->src[i].ud >>  0) & 0xff),
@@ -6574,14 +6599,18 @@ fs_visitor::run_tcs_single_patch()
    if (tcs_prog_data->instances == 1) {
       invocation_id = channels_ud;
    } else {
+      const unsigned invocation_id_mask = devinfo->gen >= 11 ?
+         INTEL_MASK(22, 16) : INTEL_MASK(23, 17);
+      const unsigned invocation_id_shift = devinfo->gen >= 11 ? 16 : 17;
+
       invocation_id = bld.vgrf(BRW_REGISTER_TYPE_UD);
 
       /* Get instance number from g0.2 bits 23:17, and multiply it by 8. */
       fs_reg t = bld.vgrf(BRW_REGISTER_TYPE_UD);
       fs_reg instance_times_8 = bld.vgrf(BRW_REGISTER_TYPE_UD);
       bld.AND(t, fs_reg(retype(brw_vec1_grf(0, 2), BRW_REGISTER_TYPE_UD)),
-              brw_imm_ud(INTEL_MASK(23, 17)));
-      bld.SHR(instance_times_8, t, brw_imm_ud(17 - 3));
+              brw_imm_ud(invocation_id_mask));
+      bld.SHR(instance_times_8, t, brw_imm_ud(invocation_id_shift - 3));
 
       bld.ADD(invocation_id, instance_times_8, channels_ud);
    }
@@ -6782,9 +6811,6 @@ fs_visitor::run_fs(bool allow_spilling, bool do_rep_send)
                  retype(dispatch_mask, BRW_REGISTER_TYPE_UW));
       }
 
-      /* Generate FS IR for main().  (the visitor only descends into
-       * functions called "main").
-       */
       emit_nir_code();
 
       if (failed)
@@ -7093,7 +7119,7 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
                const struct brw_wm_prog_key *key,
                struct brw_wm_prog_data *prog_data,
-               const nir_shader *src_shader,
+               nir_shader *shader,
                struct gl_program *prog,
                int shader_time_index8, int shader_time_index16,
                int shader_time_index32, bool allow_spilling,
@@ -7102,7 +7128,6 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
 
-   nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
    brw_nir_lower_fs_inputs(shader, devinfo, key);
    brw_nir_lower_fs_outputs(shader);

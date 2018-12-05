@@ -445,7 +445,7 @@ static bool si_can_disable_dcc(struct si_texture *tex)
 	/* We can't disable DCC if it can be written by another process. */
 	return tex->dcc_offset &&
 	       (!tex->buffer.b.is_shared ||
-		!(tex->buffer.external_usage & PIPE_HANDLE_USAGE_WRITE));
+		!(tex->buffer.external_usage & PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE));
 }
 
 static bool si_texture_discard_dcc(struct si_screen *sscreen,
@@ -763,7 +763,7 @@ static boolean si_texture_get_handle(struct pipe_screen* screen,
 		 * disable it for external clients that want write
 		 * access.
 		 */
-		if (usage & PIPE_HANDLE_USAGE_WRITE && tex->dcc_offset) {
+		if (usage & PIPE_HANDLE_USAGE_SHADER_WRITE && tex->dcc_offset) {
 			if (si_texture_disable_dcc(sctx, tex)) {
 				update_metadata = true;
 				/* si_texture_disable_dcc flushes the context */
@@ -1487,7 +1487,9 @@ static struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
 	      templ->depth0 != 1 || templ->last_level != 0)
 		return NULL;
 
-	buf = sscreen->ws->buffer_from_handle(sscreen->ws, whandle, &stride, &offset);
+	buf = sscreen->ws->buffer_from_handle(sscreen->ws, whandle,
+					      sscreen->info.max_alignment,
+					      &stride, &offset);
 	if (!buf)
 		return NULL;
 
@@ -2338,6 +2340,7 @@ si_memobj_from_handle(struct pipe_screen *screen,
 		return NULL;
 
 	buf = sscreen->ws->buffer_from_handle(sscreen->ws, whandle,
+					      sscreen->info.max_alignment,
 					      &stride, &offset);
 	if (!buf) {
 		free(memobj);
@@ -2373,7 +2376,8 @@ si_texture_from_memobj(struct pipe_screen *screen,
 	struct pipe_resource *tex =
 		si_texture_from_winsys_buffer(sscreen, templ, memobj->buf,
 					      memobj->stride, offset,
-					      PIPE_HANDLE_USAGE_READ_WRITE,
+					      PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE |
+					      PIPE_HANDLE_USAGE_SHADER_WRITE,
 					      memobj->b.dedicated);
 	if (!tex)
 		return NULL;

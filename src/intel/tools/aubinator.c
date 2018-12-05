@@ -40,7 +40,6 @@
 
 #include "util/macros.h"
 
-#include "common/gen_decoder.h"
 #include "aub_read.h"
 #include "aub_mem.h"
 
@@ -95,6 +94,18 @@ aubinator_init(void *user_data, int aub_pci_id, const char *app_name)
 
    gen_batch_decode_ctx_init(&batch_ctx, &devinfo, outfile, batch_flags,
                              xml_path, NULL, NULL, NULL);
+
+   /* Check for valid spec instance, if wrong xml_path is passed then spec
+    * instance is not initialized properly
+    */
+   if (!batch_ctx.spec) {
+      fprintf(stderr, "Failed to initialize gen_batch_decode_ctx "
+                      "spec instance\n");
+      free(xml_path);
+      gen_batch_decode_ctx_finish(&batch_ctx);
+      exit(EXIT_FAILURE);
+   }
+
    batch_ctx.max_vbo_decoded_lines = max_vbo_lines;
 
    char *color = GREEN_HEADER, *reset_color = NORMAL;
@@ -119,7 +130,7 @@ aubinator_init(void *user_data, int aub_pci_id, const char *app_name)
 }
 
 static void
-handle_execlist_write(void *user_data, enum gen_engine engine, uint64_t context_descriptor)
+handle_execlist_write(void *user_data, enum drm_i915_gem_engine_class engine, uint64_t context_descriptor)
 {
    const uint32_t pphwsp_size = 4096;
    uint32_t pphwsp_addr = context_descriptor & 0xfffff000;
@@ -131,6 +142,7 @@ handle_execlist_write(void *user_data, enum gen_engine engine, uint64_t context_
    uint32_t ring_buffer_head = context[5];
    uint32_t ring_buffer_tail = context[7];
    uint32_t ring_buffer_start = context[9];
+   uint32_t ring_buffer_length = (context[11] & 0x1ff000) + 4096;
 
    mem.pml4 = (uint64_t)context[49] << 32 | context[51];
    batch_ctx.user_data = &mem;
@@ -138,7 +150,7 @@ handle_execlist_write(void *user_data, enum gen_engine engine, uint64_t context_
    struct gen_batch_decode_bo ring_bo = aub_mem_get_ggtt_bo(&mem,
                                                             ring_buffer_start);
    assert(ring_bo.size > 0);
-   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr);
+   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr) + ring_buffer_head;
 
    if (context_descriptor & 0x100 /* ppgtt */) {
       batch_ctx.get_bo = aub_mem_get_ppgtt_bo;
@@ -146,19 +158,21 @@ handle_execlist_write(void *user_data, enum gen_engine engine, uint64_t context_
       batch_ctx.get_bo = aub_mem_get_ggtt_bo;
    }
 
-   (void)engine; /* TODO */
-   gen_print_batch(&batch_ctx, commands, ring_buffer_tail - ring_buffer_head,
-                   0);
+   batch_ctx.engine = engine;
+   gen_print_batch(&batch_ctx, commands,
+                   MIN2(ring_buffer_tail - ring_buffer_head, ring_buffer_length),
+                   ring_bo.addr + ring_buffer_head);
    aub_mem_clear_bo_maps(&mem);
 }
 
 static void
-handle_ring_write(void *user_data, enum gen_engine engine,
+handle_ring_write(void *user_data, enum drm_i915_gem_engine_class engine,
                   const void *data, uint32_t data_len)
 {
    batch_ctx.user_data = &mem;
    batch_ctx.get_bo = aub_mem_get_ggtt_bo;
 
+   batch_ctx.engine = engine;
    gen_print_batch(&batch_ctx, data, data_len, 0);
 
    aub_mem_clear_bo_maps(&mem);
@@ -178,14 +192,19 @@ aub_file_open(const char *filename)
    int fd;
 
    file = calloc(1, sizeof *file);
+   if (file == NULL)
+      return NULL;
+
    fd = open(filename, O_RDONLY);
    if (fd == -1) {
       fprintf(stderr, "open %s failed: %s\n", filename, strerror(errno));
+      free(file);
       exit(EXIT_FAILURE);
    }
 
    if (fstat(fd, &sb) == -1) {
       fprintf(stderr, "stat failed: %s\n", strerror(errno));
+      free(file);
       exit(EXIT_FAILURE);
    }
 
@@ -193,6 +212,7 @@ aub_file_open(const char *filename)
                     PROT_READ, MAP_SHARED, fd, 0);
    if (file->map == MAP_FAILED) {
       fprintf(stderr, "mmap failed: %s\n", strerror(errno));
+      free(file);
       exit(EXIT_FAILURE);
    }
 
@@ -282,7 +302,7 @@ int main(int argc, char *argv[])
          if (id < 0) {
             fprintf(stderr, "can't parse gen: '%s', expected brw, g4x, ilk, "
                             "snb, ivb, hsw, byt, bdw, chv, skl, bxt, kbl, "
-                            "aml, glk, cfl, cnl, icl", optarg);
+                            "aml, glk, cfl, whl, cnl, icl", optarg);
             exit(EXIT_FAILURE);
          } else {
             pci_id = id;
@@ -333,6 +353,11 @@ int main(int argc, char *argv[])
    }
 
    file = aub_file_open(input_file);
+   if (!file) {
+      fprintf(stderr, "Unable to allocate buffer to open aub file\n");
+      free(xml_path);
+      exit(EXIT_FAILURE);
+   }
 
    struct aub_read aub_read = {
       .user_data = &mem,
@@ -359,9 +384,11 @@ int main(int argc, char *argv[])
    fflush(stdout);
    /* close the stdout which is opened to write the output */
    close(1);
+   free(file);
    free(xml_path);
 
    wait(NULL);
+   gen_batch_decode_ctx_finish(&batch_ctx);
 
    return EXIT_SUCCESS;
 }

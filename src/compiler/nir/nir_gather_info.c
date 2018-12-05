@@ -108,13 +108,11 @@ get_io_offset(nir_deref_instr *deref, bool is_vertex_input)
 
    for (nir_deref_instr *d = deref; d; d = nir_deref_instr_parent(d)) {
       if (d->deref_type == nir_deref_type_array) {
-         nir_const_value *const_index = nir_src_as_const_value(d->arr.index);
-
-         if (!const_index)
+         if (!nir_src_is_const(d->arr.index))
             return -1;
 
          offset += glsl_count_attribute_slots(d->type, is_vertex_input) *
-            const_index->u32[0];
+                   nir_src_as_uint(d->arr.index);
       }
       /* TODO: we can get the offset for structs here see nir_lower_io() */
    }
@@ -212,10 +210,9 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_deref:
    case nir_intrinsic_store_deref:{
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
-      nir_variable *var = nir_deref_instr_get_variable(deref);
-
-      if (var->data.mode == nir_var_shader_in ||
-          var->data.mode == nir_var_shader_out) {
+      if (deref->mode == nir_var_shader_in ||
+          deref->mode == nir_var_shader_out) {
+         nir_variable *var = nir_deref_instr_get_variable(deref);
          bool is_output_read = false;
          if (var->data.mode == nir_var_shader_out &&
              instr->intrinsic == nir_intrinsic_load_deref)

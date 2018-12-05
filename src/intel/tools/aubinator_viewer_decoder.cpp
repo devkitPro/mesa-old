@@ -42,6 +42,7 @@ aub_viewer_decode_ctx_init(struct aub_viewer_decode_ctx *ctx,
    ctx->get_bo = get_bo;
    ctx->get_state_size = get_state_size;
    ctx->user_data = user_data;
+   ctx->engine = I915_ENGINE_CLASS_RENDER;
 
    ctx->cfg = cfg;
    ctx->decode_cfg = decode_cfg;
@@ -158,15 +159,33 @@ handle_state_base_address(struct aub_viewer_decode_ctx *ctx,
    struct gen_field_iterator iter;
    gen_field_iterator_init(&iter, inst, p, 0, false);
 
+   uint64_t surface_base = 0, dynamic_base = 0, instruction_base = 0;
+   bool surface_modify = 0, dynamic_modify = 0, instruction_modify = 0;
+
    while (gen_field_iterator_next(&iter)) {
       if (strcmp(iter.name, "Surface State Base Address") == 0) {
-         ctx->surface_base = iter.raw_value;
+         surface_base = iter.raw_value;
       } else if (strcmp(iter.name, "Dynamic State Base Address") == 0) {
-         ctx->dynamic_base = iter.raw_value;
+         dynamic_base = iter.raw_value;
       } else if (strcmp(iter.name, "Instruction Base Address") == 0) {
-         ctx->instruction_base = iter.raw_value;
+         instruction_base = iter.raw_value;
+      } else if (strcmp(iter.name, "Surface State Base Address Modify Enable") == 0) {
+         surface_modify = iter.raw_value;
+      } else if (strcmp(iter.name, "Dynamic State Base Address Modify Enable") == 0) {
+         dynamic_modify = iter.raw_value;
+      } else if (strcmp(iter.name, "Instruction Base Address Modify Enable") == 0) {
+         instruction_modify = iter.raw_value;
       }
    }
+
+   if (dynamic_modify)
+      ctx->dynamic_base = dynamic_base;
+
+   if (surface_modify)
+      ctx->surface_base = surface_base;
+
+   if (instruction_modify)
+      ctx->instruction_base = instruction_base;
 }
 
 static void
@@ -358,7 +377,7 @@ handle_3dstate_vertex_buffers(struct aub_viewer_decode_ctx *ctx,
          if (!ready)
             continue;
 
-         ImGui::Text("vertex buffer %d, size %d", index, vb_size);
+         ImGui::Text("vertex buffer %d, size %d, pitch %d", index, vb_size, pitch);
 
          if (vb.map == NULL) {
             ImGui::TextColored(ctx->cfg->missing_color,
@@ -606,8 +625,6 @@ decode_dynamic_state_pointers(struct aub_viewer_decode_ctx *ctx,
                               struct gen_group *inst, const uint32_t *p,
                               const char *struct_type,  int count)
 {
-   struct gen_group *state = gen_spec_find_struct(ctx->spec, struct_type);
-
    uint32_t state_offset = 0;
 
    struct gen_field_iterator iter;
@@ -630,12 +647,28 @@ decode_dynamic_state_pointers(struct aub_viewer_decode_ctx *ctx,
       return;
    }
 
-   for (int i = 0; i < count; i++) {
-      ImGui::Text("%s %d", struct_type, i);
-      aub_viewer_print_group(ctx, state, state_offset, state_map);
+   struct gen_group *state = gen_spec_find_struct(ctx->spec, struct_type);
+   if (strcmp(struct_type, "BLEND_STATE") == 0) {
+      /* Blend states are different from the others because they have a header
+       * struct called BLEND_STATE which is followed by a variable number of
+       * BLEND_STATE_ENTRY structs.
+       */
+      ImGui::Text("%s", struct_type);
+      aub_viewer_print_group(ctx, state, state_addr, state_map);
 
       state_addr += state->dw_length * 4;
-      state_map += state->dw_length;
+      state_map += state->dw_length * 4;
+
+      struct_type = "BLEND_STATE_ENTRY";
+      state = gen_spec_find_struct(ctx->spec, struct_type);
+   }
+
+   for (int i = 0; i < count; i++) {
+      ImGui::Text("%s %d", struct_type, i);
+      aub_viewer_print_group(ctx, state, state_addr, state_map);
+
+      state_addr += state->dw_length * 4;
+      state_map += state->dw_length * 4;
    }
 }
 
@@ -843,38 +876,17 @@ struct custom_decoder info_decoders[] = {
    { "3DSTATE_CONSTANT_PS", handle_urb_constant, AUB_DECODE_STAGE_PS, },
 };
 
-static inline uint64_t
-get_address(struct gen_spec *spec, const uint32_t *p)
-{
-   /* Addresses are always guaranteed to be page-aligned and sometimes
-    * hardware packets have extra stuff stuffed in the bottom 12 bits.
-    */
-   uint64_t addr = p[0] & ~0xfffu;
-
-   if (gen_spec_get_gen(spec) >= gen_make_gen(8,0)) {
-      /* On Broadwell and above, we have 48-bit addresses which consume two
-       * dwords.  Some packets require that these get stored in a "canonical
-       * form" which means that bit 47 is sign-extended through the upper
-       * bits. In order to correctly handle those aub dumps, we need to mask
-       * off the top 16 bits.
-       */
-      addr |= ((uint64_t)p[1] & 0xffff) << 32;
-   }
-
-   return addr;
-}
-
 void
 aub_viewer_render_batch(struct aub_viewer_decode_ctx *ctx,
                         const void *_batch, uint32_t batch_size,
                         uint64_t batch_addr)
 {
    struct gen_group *inst;
-   const uint32_t *p, *batch = (const uint32_t *) _batch, *end = batch + batch_size;
+   const uint32_t *p, *batch = (const uint32_t *) _batch, *end = batch + batch_size / sizeof(uint32_t);
    int length;
 
    for (p = batch; p < end; p += length) {
-      inst = gen_spec_find_instruction(ctx->spec, p);
+      inst = gen_spec_find_instruction(ctx->spec, ctx->engine, p);
       length = gen_group_get_length(inst, p);
       assert(inst == NULL || length > 0);
       length = MAX2(1, length);

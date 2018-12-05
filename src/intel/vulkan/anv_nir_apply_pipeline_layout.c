@@ -144,11 +144,9 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
    uint32_t array_size =
       state->layout->set[set].layout->binding[binding].array_size;
 
-   nir_const_value *const_array_index = nir_src_as_const_value(intrin->src[0]);
-
    nir_ssa_def *block_index;
-   if (const_array_index) {
-      unsigned array_index = const_array_index->u32[0];
+   if (nir_src_is_const(intrin->src[0])) {
+      unsigned array_index = nir_src_as_uint(intrin->src[0]);
       array_index = MIN2(array_index, array_size - 1);
       block_index = nir_imm_int(b, surface_index + array_index);
    } else {
@@ -299,9 +297,9 @@ lower_tex_deref(nir_tex_instr *tex, nir_tex_src_type deref_src_type,
    if (deref->deref_type != nir_deref_type_var) {
       assert(deref->deref_type == nir_deref_type_array);
 
-      nir_const_value *const_index = nir_src_as_const_value(deref->arr.index);
-      if (const_index) {
-         *base_index += MIN2(const_index->u32[0], array_size - 1);
+      if (nir_src_is_const(deref->arr.index)) {
+         unsigned arr_index = nir_src_as_uint(deref->arr.index);
+         *base_index += MIN2(arr_index, array_size - 1);
       } else {
          nir_builder *b = &state->builder;
 
@@ -337,8 +335,7 @@ tex_instr_get_and_remove_plane_src(nir_tex_instr *tex)
    if (plane_src_idx < 0)
       return 0;
 
-   unsigned plane =
-      nir_src_as_const_value(tex->src[plane_src_idx].src)->u32[0];
+   unsigned plane = nir_src_as_uint(tex->src[plane_src_idx].src);
 
    nir_tex_instr_remove_src(tex, plane_src_idx);
 
@@ -426,7 +423,8 @@ setup_vec4_uniform_value(uint32_t *params, uint32_t offset, unsigned n)
 }
 
 void
-anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
+anv_nir_apply_pipeline_layout(const struct anv_physical_device *pdevice,
+                              bool robust_buffer_access,
                               struct anv_pipeline_layout *layout,
                               nir_shader *shader,
                               struct brw_stage_prog_data *prog_data,
@@ -437,7 +435,7 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
    struct apply_pipeline_layout_state state = {
       .shader = shader,
       .layout = layout,
-      .add_bounds_checks = pipeline->device->robust_buffer_access,
+      .add_bounds_checks = robust_buffer_access,
    };
 
    void *mem_ctx = ralloc_context(NULL);

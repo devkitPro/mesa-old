@@ -32,13 +32,11 @@ args_gbm = []
 deps_gbm = []
 incs_gbm = [
   include_directories('main'), inc_include, inc_src, inc_loader,
-  inc_wayland_drm,
 ]
 
 if with_dri2
   files_gbm += files('backends/dri/gbm_dri.c', 'backends/dri/gbm_driint.h')
   deps_gbm += dep_libdrm # TODO: pthread-stubs
-  args_gbm += '-DDEFAULT_DRIVER_DIR="@0@"'.format(dri_search_path)
 endif
 if with_platform_wayland
   deps_gbm += dep_wayland_server
@@ -73,6 +71,7 @@ if with_tests
     'gbm-symbols-check',
     find_program('gbm-symbols-check'),
     env : env_test,
-    args : libgbm
+    args : libgbm,
+    suite : ['gbm'],
   )
 endif

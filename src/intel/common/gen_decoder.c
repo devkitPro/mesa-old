@@ -163,11 +163,41 @@ create_group(struct parser_context *ctx,
    group->spec = ctx->spec;
    group->variable = false;
    group->fixed_length = fixed_length;
+   group->dword_length_field = NULL;
+   group->dw_length = 0;
+   group->engine_mask = I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_RENDER) |
+                        I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_VIDEO) |
+                        I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_COPY);
+   group->bias = 1;
 
    for (int i = 0; atts[i]; i += 2) {
       char *p;
       if (strcmp(atts[i], "length") == 0) {
          group->dw_length = strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "bias") == 0) {
+         group->bias = strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "engine") == 0) {
+         void *mem_ctx = ralloc_context(NULL);
+         char *tmp = ralloc_strdup(mem_ctx, atts[i + 1]);
+         char *save_ptr;
+         char *tok = strtok_r(tmp, "|", &save_ptr);
+
+         group->engine_mask = 0;
+         while (tok != NULL) {
+            if (strcmp(tok, "render") == 0) {
+               group->engine_mask |= I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_RENDER);
+            } else if (strcmp(tok, "video") == 0) {
+               group->engine_mask |= I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_VIDEO);
+            } else if (strcmp(tok, "blitter") == 0) {
+               group->engine_mask |= I915_ENGINE_CLASS_TO_MASK(I915_ENGINE_CLASS_COPY);
+            } else {
+               fprintf(stderr, "unknown engine class defined for instruction \"%s\": %s\n", name, atts[i + 1]);
+            }
+
+            tok = strtok_r(NULL, "|", &save_ptr);
+         }
+
+         ralloc_free(mem_ctx);
       }
    }
 
@@ -288,15 +318,18 @@ create_field(struct parser_context *ctx, const char **atts)
    for (int i = 0; atts[i]; i += 2) {
       char *p;
 
-      if (strcmp(atts[i], "name") == 0)
+      if (strcmp(atts[i], "name") == 0) {
          field->name = ralloc_strdup(field, atts[i + 1]);
-      else if (strcmp(atts[i], "start") == 0)
+         if (strcmp(field->name, "DWord Length") == 0) {
+            field->parent->dword_length_field = field;
+         }
+      } else if (strcmp(atts[i], "start") == 0) {
          field->start = strtoul(atts[i + 1], &p, 0);
-      else if (strcmp(atts[i], "end") == 0) {
+      } else if (strcmp(atts[i], "end") == 0) {
          field->end = strtoul(atts[i + 1], &p, 0);
-      } else if (strcmp(atts[i], "type") == 0)
+      } else if (strcmp(atts[i], "type") == 0) {
          field->type = string_to_type(ctx, atts[i + 1]);
-      else if (strcmp(atts[i], "default") == 0 &&
+      } else if (strcmp(atts[i], "default") == 0 &&
                field->start >= 16 && field->end <= 31) {
          field->has_default = true;
          field->default_value = strtoul(atts[i + 1], &p, 0);
@@ -463,14 +496,13 @@ character_data(void *data, const XML_Char *s, int len)
 }
 
 static int
-devinfo_to_gen(const struct gen_device_info *devinfo)
+devinfo_to_gen(const struct gen_device_info *devinfo, bool x10)
 {
-   int value = 10 * devinfo->gen;
+   if (devinfo->is_baytrail || devinfo->is_haswell) {
+      return devinfo->gen * 10 + 5;
+   }
 
-   if (devinfo->is_baytrail || devinfo->is_haswell)
-      value += 5;
-
-   return value;
+   return x10 ? devinfo->gen * 10 : devinfo->gen;
 }
 
 static uint32_t zlib_inflate(const void *compressed_data,
@@ -526,6 +558,30 @@ static uint32_t _hash_uint32(const void *key)
    return (uint32_t) (uintptr_t) key;
 }
 
+static struct gen_spec *
+gen_spec_init(void)
+{
+   struct gen_spec *spec;
+   spec = rzalloc(NULL, struct gen_spec);
+   if (spec == NULL)
+      return NULL;
+
+   spec->commands =
+      _mesa_hash_table_create(spec, _mesa_hash_string, _mesa_key_string_equal);
+   spec->structs =
+      _mesa_hash_table_create(spec, _mesa_hash_string, _mesa_key_string_equal);
+   spec->registers_by_name =
+      _mesa_hash_table_create(spec, _mesa_hash_string, _mesa_key_string_equal);
+   spec->registers_by_offset =
+      _mesa_hash_table_create(spec, _hash_uint32, _mesa_key_pointer_equal);
+   spec->enums =
+      _mesa_hash_table_create(spec, _mesa_hash_string, _mesa_key_string_equal);
+   spec->access_cache =
+      _mesa_hash_table_create(spec, _mesa_hash_string, _mesa_key_string_equal);
+
+   return spec;
+}
+
 struct gen_spec *
 gen_spec_load(const struct gen_device_info *devinfo)
 {
@@ -534,7 +590,7 @@ gen_spec_load(const struct gen_device_info *devinfo)
    uint8_t *text_data = NULL;
    uint32_t text_offset = 0, text_length = 0;
    MAYBE_UNUSED uint32_t total_length;
-   uint32_t gen_10 = devinfo_to_gen(devinfo);
+   uint32_t gen_10 = devinfo_to_gen(devinfo, true);
 
    for (int i = 0; i < ARRAY_SIZE(genxml_files_table); i++) {
       if (genxml_files_table[i].gen_10 == gen_10) {
@@ -560,21 +616,11 @@ gen_spec_load(const struct gen_device_info *devinfo)
    XML_SetElementHandler(ctx.parser, start_element, end_element);
    XML_SetCharacterDataHandler(ctx.parser, character_data);
 
-   ctx.spec = rzalloc(NULL, struct gen_spec);
-
-   ctx.spec->commands =
-      _mesa_hash_table_create(ctx.spec, _mesa_hash_string, _mesa_key_string_equal);
-   ctx.spec->structs =
-      _mesa_hash_table_create(ctx.spec, _mesa_hash_string, _mesa_key_string_equal);
-   ctx.spec->registers_by_name =
-      _mesa_hash_table_create(ctx.spec, _mesa_hash_string, _mesa_key_string_equal);
-   ctx.spec->registers_by_offset =
-      _mesa_hash_table_create(ctx.spec, _hash_uint32, _mesa_key_pointer_equal);
-   ctx.spec->enums =
-      _mesa_hash_table_create(ctx.spec, _mesa_hash_string, _mesa_key_string_equal);
-
-   ctx.spec->access_cache =
-      _mesa_hash_table_create(ctx.spec, _mesa_hash_string, _mesa_key_string_equal);
+   ctx.spec = gen_spec_init();
+   if (ctx.spec == NULL) {
+      fprintf(stderr, "Failed to create gen_spec\n");
+      return NULL;
+   }
 
    total_length = zlib_inflate(compress_genxmls,
                                sizeof(compress_genxmls),
@@ -613,7 +659,7 @@ gen_spec_load_from_path(const struct gen_device_info *devinfo,
    FILE *input;
 
    len = snprintf(filename, filename_len, "%s/gen%i.xml",
-                  path, devinfo_to_gen(devinfo));
+                  path, devinfo_to_gen(devinfo, false));
    assert(len < filename_len);
 
    input = fopen(filename, "r");
@@ -636,24 +682,31 @@ gen_spec_load_from_path(const struct gen_device_info *devinfo,
    XML_SetElementHandler(ctx.parser, start_element, end_element);
    XML_SetCharacterDataHandler(ctx.parser, character_data);
    ctx.loc.filename = filename;
-   ctx.spec = rzalloc(NULL, struct gen_spec);
+
+   ctx.spec = gen_spec_init();
+   if (ctx.spec == NULL) {
+      fprintf(stderr, "Failed to create gen_spec\n");
+      goto end;
+   }
 
    do {
       buf = XML_GetBuffer(ctx.parser, XML_BUFFER_SIZE);
       len = fread(buf, 1, XML_BUFFER_SIZE, input);
-      if (len == 0) {
+      if (ferror(input)) {
          fprintf(stderr, "fread: %m\n");
-         free(ctx.spec);
+         gen_spec_destroy(ctx.spec);
          ctx.spec = NULL;
          goto end;
-      }
+      } else if (feof(input))
+         goto end;
+
       if (XML_ParseBuffer(ctx.parser, len, len == 0) == 0) {
          fprintf(stderr,
                  "Error parsing XML at line %ld col %ld: %s\n",
                  XML_GetCurrentLineNumber(ctx.parser),
                  XML_GetCurrentColumnNumber(ctx.parser),
                  XML_ErrorString(XML_GetErrorCode(ctx.parser)));
-         free(ctx.spec);
+         gen_spec_destroy(ctx.spec);
          ctx.spec = NULL;
          goto end;
       }
@@ -665,6 +718,12 @@ gen_spec_load_from_path(const struct gen_device_info *devinfo,
    fclose(input);
    free(filename);
 
+   /* free ctx.spec if genxml is empty */
+   if (ctx.spec && _mesa_hash_table_num_entries(ctx.spec->commands) == 0) {
+      gen_spec_destroy(ctx.spec);
+      return NULL;
+   }
+
    return ctx.spec;
 }
 
@@ -674,14 +733,15 @@ void gen_spec_destroy(struct gen_spec *spec)
 }
 
 struct gen_group *
-gen_spec_find_instruction(struct gen_spec *spec, const uint32_t *p)
+gen_spec_find_instruction(struct gen_spec *spec,
+                          enum drm_i915_gem_engine_class engine,
+                          const uint32_t *p)
 {
-   struct hash_entry *entry;
-
    hash_table_foreach(spec->commands, entry) {
       struct gen_group *command = entry->data;
       uint32_t opcode = *p & command->opcode_mask;
-      if (opcode == command->opcode)
+      if ((command->engine_mask & I915_ENGINE_CLASS_TO_MASK(engine)) &&
+           opcode == command->opcode)
          return command;
    }
 
@@ -717,8 +777,16 @@ gen_group_find_field(struct gen_group *group, const char *name)
 int
 gen_group_get_length(struct gen_group *group, const uint32_t *p)
 {
-   if (group && group->fixed_length)
-      return group->dw_length;
+   if (group) {
+      if (group->fixed_length)
+         return group->dw_length;
+      else {
+         struct gen_field *field = group->dword_length_field;
+         if (field) {
+            return field_value(p[0], field->start, field->end) + group->bias;
+         }
+      }
+   }
 
    uint32_t h = p[0];
    uint32_t type = field_value(h, 29, 31);

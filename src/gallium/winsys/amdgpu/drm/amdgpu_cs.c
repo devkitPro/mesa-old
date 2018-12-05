@@ -598,7 +598,7 @@ static int amdgpu_lookup_or_add_sparse_buffer(struct amdgpu_cs *acs,
    /* We delay adding the backing buffers until we really have to. However,
     * we cannot delay accounting for memory use.
     */
-   simple_mtx_lock(&bo->u.sparse.commit_lock);
+   simple_mtx_lock(&bo->lock);
 
    list_for_each_entry(struct amdgpu_sparse_backing, backing, &bo->u.sparse.backing, list) {
       if (bo->initial_domain & RADEON_DOMAIN_VRAM)
@@ -607,7 +607,7 @@ static int amdgpu_lookup_or_add_sparse_buffer(struct amdgpu_cs *acs,
          acs->main.base.used_gart += backing->bo->base.size;
    }
 
-   simple_mtx_unlock(&bo->u.sparse.commit_lock);
+   simple_mtx_unlock(&bo->lock);
 
    return idx;
 }
@@ -845,6 +845,10 @@ static bool amdgpu_init_cs_context(struct amdgpu_winsys *ws,
       cs->ib[IB_MAIN].ip_type = AMDGPU_HW_IP_VCN_ENC;
       break;
 
+   case RING_VCN_JPEG:
+      cs->ib[IB_MAIN].ip_type = AMDGPU_HW_IP_VCN_JPEG;
+      break;
+
    case RING_COMPUTE:
    case RING_GFX:
       cs->ib[IB_MAIN].ip_type = ring_type == RING_GFX ? AMDGPU_HW_IP_GFX :
@@ -919,7 +923,8 @@ amdgpu_cs_create(struct radeon_winsys_ctx *rwctx,
                  enum ring_type ring_type,
                  void (*flush)(void *ctx, unsigned flags,
                                struct pipe_fence_handle **fence),
-                 void *flush_ctx)
+                 void *flush_ctx,
+                 bool stop_exec_on_failure)
 {
    struct amdgpu_ctx *ctx = (struct amdgpu_ctx*)rwctx;
    struct amdgpu_cs *cs;
@@ -935,6 +940,7 @@ amdgpu_cs_create(struct radeon_winsys_ctx *rwctx,
    cs->flush_cs = flush;
    cs->flush_data = flush_ctx;
    cs->ring_type = ring_type;
+   cs->stop_exec_on_failure = stop_exec_on_failure;
 
    struct amdgpu_cs_fence_info fence_info;
    fence_info.handle = cs->ctx->user_fence_bo;
@@ -1261,7 +1267,7 @@ static bool amdgpu_add_sparse_backing_buffers(struct amdgpu_cs_context *cs)
       struct amdgpu_cs_buffer *buffer = &cs->sparse_buffers[i];
       struct amdgpu_winsys_bo *bo = buffer->bo;
 
-      simple_mtx_lock(&bo->u.sparse.commit_lock);
+      simple_mtx_lock(&bo->lock);
 
       list_for_each_entry(struct amdgpu_sparse_backing, backing, &bo->u.sparse.backing, list) {
          /* We can directly add the buffer here, because we know that each
@@ -1270,7 +1276,7 @@ static bool amdgpu_add_sparse_backing_buffers(struct amdgpu_cs_context *cs)
          int idx = amdgpu_do_add_real_buffer(cs, backing->bo);
          if (idx < 0) {
             fprintf(stderr, "%s: failed to add buffer\n", __FUNCTION__);
-            simple_mtx_unlock(&bo->u.sparse.commit_lock);
+            simple_mtx_unlock(&bo->lock);
             return false;
          }
 
@@ -1279,7 +1285,7 @@ static bool amdgpu_add_sparse_backing_buffers(struct amdgpu_cs_context *cs)
          p_atomic_inc(&backing->bo->num_active_ioctls);
       }
 
-      simple_mtx_unlock(&bo->u.sparse.commit_lock);
+      simple_mtx_unlock(&bo->lock);
    }
 
    return true;
@@ -1391,7 +1397,7 @@ void amdgpu_cs_submit_ib(void *job, int thread_index)
    if (acs->ring_type == RING_GFX)
       ws->gfx_bo_list_counter += cs->num_real_buffers;
 
-   if (acs->ctx->num_rejected_cs) {
+   if (acs->stop_exec_on_failure && acs->ctx->num_rejected_cs) {
       r = -ECANCELED;
    } else {
       struct drm_amdgpu_cs_chunk chunks[6];
@@ -1588,6 +1594,14 @@ static int amdgpu_cs_flush(struct radeon_cmdbuf *rcs,
    case RING_UVD_ENC:
       while (rcs->current.cdw & 15)
          radeon_emit(rcs, 0x80000000); /* type2 nop packet */
+      break;
+   case RING_VCN_JPEG:
+      if (rcs->current.cdw % 2)
+         assert(0);
+      while (rcs->current.cdw & 15) {
+         radeon_emit(rcs, 0x60000000); /* nop packet */
+         radeon_emit(rcs, 0x00000000);
+      }
       break;
    case RING_VCN_DEC:
       while (rcs->current.cdw & 15)

@@ -245,7 +245,6 @@ all_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
  */
 static void
 add_aux_state_tracking_buffer(struct anv_image *image,
-                              VkImageAspectFlagBits aspect,
                               uint32_t plane,
                               const struct anv_device *device)
 {
@@ -463,7 +462,7 @@ make_surface(const struct anv_device *dev,
             }
 
             add_surface(image, &image->planes[plane].aux_surface, plane);
-            add_aux_state_tracking_buffer(image, aspect, plane, dev);
+            add_aux_state_tracking_buffer(image, plane, dev);
 
             /* For images created without MUTABLE_FORMAT_BIT set, we know that
              * they will always be used with the original format.  In
@@ -487,7 +486,7 @@ make_surface(const struct anv_device *dev,
                                  &image->planes[plane].aux_surface.isl);
       if (ok) {
          add_surface(image, &image->planes[plane].aux_surface, plane);
-         add_aux_state_tracking_buffer(image, aspect, plane, dev);
+         add_aux_state_tracking_buffer(image, plane, dev);
          image->planes[plane].aux_usage = ISL_AUX_USAGE_MCS;
       }
    }
@@ -631,14 +630,12 @@ anv_CreateImage(VkDevice device,
                 const VkAllocationCallbacks *pAllocator,
                 VkImage *pImage)
 {
-#ifdef ANDROID
    const VkNativeBufferANDROID *gralloc_info =
       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
 
    if (gralloc_info)
       return anv_image_from_gralloc(device, pCreateInfo, gralloc_info,
                                     pAllocator, pImage);
-#endif
 
    return anv_image_create(device,
       &(struct anv_image_create_info) {
@@ -920,6 +917,12 @@ anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
 
    case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
       unreachable("VK_KHR_shared_presentable_image is unsupported");
+
+   case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
+      unreachable("VK_EXT_fragment_density_map is unsupported");
+
+   case VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV:
+      unreachable("VK_NV_shading_rate_image is unsupported");
    }
 
    /* If the layout isn't recognized in the exhaustive switch above, the
@@ -1097,7 +1100,7 @@ anv_image_fill_surface_state(struct anv_device *device,
                             .size_B = surface->isl.size_B,
                             .format = ISL_FORMAT_RAW,
                             .stride_B = 1,
-                            .mocs = device->default_mocs);
+                            .mocs = anv_mocs_for_bo(device, address.bo));
       state_inout->address = address,
       state_inout->aux_address = ANV_NULL_ADDRESS;
       state_inout->clear_address = ANV_NULL_ADDRESS;
@@ -1198,7 +1201,8 @@ anv_image_fill_surface_state(struct anv_device *device,
                           .aux_address = anv_address_physical(aux_address),
                           .clear_address = anv_address_physical(clear_address),
                           .use_clear_address = !anv_address_is_null(clear_address),
-                          .mocs = device->default_mocs,
+                          .mocs = anv_mocs_for_bo(device,
+                                                  state_inout->address.bo),
                           .x_offset_sa = tile_x_sa,
                           .y_offset_sa = tile_y_sa);
 
@@ -1242,6 +1246,28 @@ remap_aspect_flags(VkImageAspectFlags view_aspects)
    }
    /* No special remapping needed for depth & stencil aspects. */
    return view_aspects;
+}
+
+static uint32_t
+anv_image_aspect_get_planes(VkImageAspectFlags aspect_mask)
+{
+   uint32_t planes = 0;
+
+   if (aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT |
+                      VK_IMAGE_ASPECT_DEPTH_BIT |
+                      VK_IMAGE_ASPECT_STENCIL_BIT |
+                      VK_IMAGE_ASPECT_PLANE_0_BIT))
+      planes++;
+   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_1_BIT)
+      planes++;
+   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT)
+      planes++;
+
+   if ((aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
+       (aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0)
+      planes++;
+
+   return planes;
 }
 
 VkResult
@@ -1320,7 +1346,7 @@ anv_CreateImageView(VkDevice _device,
    uint32_t iaspect_bit, vplane = 0;
    anv_foreach_image_aspect_bit(iaspect_bit, image, expanded_aspects) {
       uint32_t iplane =
-         anv_image_aspect_to_plane(expanded_aspects, 1UL << iaspect_bit);
+         anv_image_aspect_to_plane(image->aspects, 1UL << iaspect_bit);
       VkImageAspectFlags vplane_aspect =
          anv_plane_to_aspect(iview->aspect_mask, vplane);
       struct anv_format_plane format =

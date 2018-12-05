@@ -95,6 +95,7 @@
 #include "egldisplay.h"
 #include "egltypedefs.h"
 #include "eglcurrent.h"
+#include "egldevice.h"
 #include "egldriver.h"
 #include "eglsurface.h"
 #include "eglconfig.h"
@@ -634,8 +635,7 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
       _eglCreateExtensionsString(disp);
       _eglCreateAPIsString(disp);
       snprintf(disp->VersionString, sizeof(disp->VersionString),
-               "%d.%d (%s)", disp->Version / 10, disp->Version % 10,
-               disp->Driver->Name);
+               "%d.%d", disp->Version / 10, disp->Version % 10);
    }
 
    /* Update applications version of major and minor if not NULL */
@@ -1222,6 +1222,9 @@ eglSwapInterval(EGLDisplay dpy, EGLint interval)
    if (_eglGetSurfaceHandle(surf) == EGL_NO_SURFACE)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
 
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
+
    interval = CLAMP(interval,
                     surf->Config->MinSwapInterval,
                     surf->Config->MaxSwapInterval);
@@ -1256,6 +1259,9 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
        surf != ctx->DrawSurface)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
    #endif
+
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
 
    /* From the EGL 1.5 spec:
     *
@@ -1295,6 +1301,9 @@ _eglSwapBuffersWithDamageCommon(_EGLDisplay *disp, _EGLSurface *surf,
    if (_eglGetContextHandle(ctx) == EGL_NO_CONTEXT ||
        surf != ctx->DrawSurface)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
+
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
 
    if ((n_rects > 0 && rects == NULL) || n_rects < 0)
       RETURN_EGL_ERROR(disp, EGL_BAD_PARAMETER, EGL_FALSE);
@@ -2573,6 +2582,69 @@ eglSetBlobCacheFuncsANDROID(EGLDisplay *dpy, EGLSetBlobFuncANDROID set,
    drv->API.SetBlobCacheFuncsANDROID(drv, disp, set, get);
 
    _eglUnlockDisplay(disp);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDeviceAttribEXT(EGLDeviceEXT device,
+                        EGLint attribute,
+                        EGLAttrib *value)
+{
+   _EGLDevice *dev = _eglLookupDevice(device);
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+   if (!dev)
+      RETURN_EGL_ERROR(NULL, EGL_BAD_DEVICE_EXT, EGL_FALSE);
+
+   ret = _eglQueryDeviceAttribEXT(dev, attribute, value);
+   RETURN_EGL_EVAL(NULL, ret);
+}
+
+static const char * EGLAPIENTRY
+eglQueryDeviceStringEXT(EGLDeviceEXT device,
+                        EGLint name)
+{
+   _EGLDevice *dev = _eglLookupDevice(device);
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, NULL);
+   if (!dev)
+      RETURN_EGL_ERROR(NULL, EGL_BAD_DEVICE_EXT, NULL);
+
+   RETURN_EGL_EVAL(NULL, _eglQueryDeviceStringEXT(dev, name));
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDevicesEXT(EGLint max_devices,
+                   EGLDeviceEXT *devices,
+                   EGLint *num_devices)
+{
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+   ret = _eglQueryDevicesEXT(max_devices, (_EGLDevice **) devices,
+                             num_devices);
+   RETURN_EGL_EVAL(NULL, ret);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDisplayAttribEXT(EGLDisplay dpy,
+                         EGLint attribute,
+                         EGLAttrib *value)
+{
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLDriver *drv;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+   _EGL_CHECK_DISPLAY(disp, EGL_FALSE, drv);
+
+   switch (attribute) {
+   case EGL_DEVICE_EXT:
+      *value = (EGLAttrib) disp->Device;
+      break;
+   default:
+      RETURN_EGL_ERROR(disp, EGL_BAD_ATTRIBUTE, EGL_FALSE);
+   }
+   RETURN_EGL_SUCCESS(disp, EGL_TRUE);
 }
 
 __eglMustCastToProperFunctionPointerType EGLAPIENTRY

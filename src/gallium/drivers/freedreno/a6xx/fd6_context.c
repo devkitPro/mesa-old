@@ -29,6 +29,7 @@
 
 #include "fd6_context.h"
 #include "fd6_blend.h"
+#include "fd6_blitter.h"
 #include "fd6_draw.h"
 #include "fd6_emit.h"
 #include "fd6_gmem.h"
@@ -49,10 +50,15 @@ fd6_context_destroy(struct pipe_context *pctx)
 
 	fd_bo_del(fd6_ctx->vs_pvt_mem);
 	fd_bo_del(fd6_ctx->fs_pvt_mem);
-	fd_bo_del(fd6_ctx->vsc_size_mem);
+	fd_bo_del(fd6_ctx->vsc_data);
+	fd_bo_del(fd6_ctx->vsc_data2);
 	fd_bo_del(fd6_ctx->blit_mem);
 
 	fd_context_cleanup_common_vbos(&fd6_ctx->base);
+
+	ir3_cache_destroy(fd6_ctx->shader_cache);
+
+	fd6_texture_fini(pctx);
 
 	free(fd6_ctx);
 }
@@ -98,13 +104,23 @@ fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 	if (!pctx)
 		return NULL;
 
+	/* fd_context_init overwrites delete_rasterizer_state, so set this
+	 * here. */
+	pctx->delete_rasterizer_state = fd6_rasterizer_state_delete;
+	pctx->delete_depth_stencil_alpha_state = fd6_depth_stencil_alpha_state_delete;
+
 	fd6_ctx->vs_pvt_mem = fd_bo_new(screen->dev, 0x2000,
 			DRM_FREEDRENO_GEM_TYPE_KMEM);
 
 	fd6_ctx->fs_pvt_mem = fd_bo_new(screen->dev, 0x2000,
 			DRM_FREEDRENO_GEM_TYPE_KMEM);
 
-	fd6_ctx->vsc_size_mem = fd_bo_new(screen->dev, 0x1000,
+	fd6_ctx->vsc_data = fd_bo_new(screen->dev,
+			(A6XX_VSC_DATA_PITCH * 32) + 0x100,
+			DRM_FREEDRENO_GEM_TYPE_KMEM);
+
+	fd6_ctx->vsc_data2 = fd_bo_new(screen->dev,
+			A6XX_VSC_DATA2_PITCH * 32,
 			DRM_FREEDRENO_GEM_TYPE_KMEM);
 
 	fd6_ctx->blit_mem = fd_bo_new(screen->dev, 0x1000,
@@ -113,6 +129,7 @@ fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 	fd_context_setup_common_vbos(&fd6_ctx->base);
 
 	fd6_query_context_init(pctx);
+	fd6_blitter_init(pctx);
 
 	fd6_ctx->border_color_uploader = u_upload_create(pctx, 4096, 0,
                                                          PIPE_USAGE_STREAM, 0);

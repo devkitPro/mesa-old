@@ -691,6 +691,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       [NIR_INTRINSIC_IMAGE_ARRAY] = "image_array",
       [NIR_INTRINSIC_ACCESS] = "access",
       [NIR_INTRINSIC_FORMAT] = "format",
+      [NIR_INTRINSIC_ALIGN_MUL] = "align_mul",
+      [NIR_INTRINSIC_ALIGN_OFFSET] = "align_offset",
    };
    for (unsigned idx = 1; idx < NIR_INTRINSIC_NUM_INDEX_FLAGS; idx++) {
       if (!info->index_map[idx])
@@ -719,7 +721,7 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
             [GLSL_SAMPLER_DIM_SUBPASS_MS] = "Subpass-MSAA",
          };
          enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
-         assert(dim < ARRAY_SIZE(dim_name) && dim_name[idx]);
+         assert(dim < ARRAY_SIZE(dim_name) && dim_name[dim]);
          fprintf(fp, " image_dim=%s", dim_name[dim]);
       } else if (idx == NIR_INTRINSIC_IMAGE_ARRAY) {
          bool array = nir_intrinsic_image_dim(instr);
@@ -1085,7 +1087,6 @@ print_block(nir_block *block, print_state *state, unsigned tabs)
    nir_block **preds =
       malloc(block->predecessors->entries * sizeof(nir_block *));
 
-   struct set_entry *entry;
    unsigned i = 0;
    set_foreach(block->predecessors, entry) {
       preds[i++] = (nir_block *) entry->key;
@@ -1311,6 +1312,7 @@ void
 nir_print_shader(nir_shader *shader, FILE *fp)
 {
    nir_print_shader_annotated(shader, fp, NULL);
+   fflush(fp);
 }
 
 void

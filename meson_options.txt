@@ -25,7 +25,7 @@ option(
   choices : [
     '', 'auto', 'x11', 'wayland', 'drm', 'surfaceless', 'haiku', 'android',
   ],
-  description : 'comma separated list of window systems to support. If this is set to auto all platforms applicable to the OS will be enabled.'
+  description : 'window systems to support. If this is set to `auto`, all platforms applicable will be enabled.'
 )
 option(
   'dri3',
@@ -302,7 +302,7 @@ option(
   type : 'array',
   value : [],
   choices : ['freedreno', 'glsl', 'intel', 'intel-ui', 'nir', 'nouveau', 'xvmc', 'all'],
-  description : 'List of tools to build.',
+  description : 'List of tools to build. (Note: `intel-ui` selects `intel`)',
 )
 option(
   'power8',

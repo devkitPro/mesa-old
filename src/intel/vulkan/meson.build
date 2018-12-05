@@ -111,6 +111,8 @@ endforeach
 
 libanv_files = files(
   'anv_allocator.c',
+  'anv_android_stubs.c',
+  'anv_android.h',
   'anv_batch_chain.c',
   'anv_blorp.c',
   'anv_cmd_buffer.c',
@@ -176,7 +178,7 @@ endif
 
 libanv_common = static_library(
   'anv_common',
-  [libanv_files, anv_entrypoints, anv_extensions_c, anv_extensions_h],
+  [libanv_files, anv_entrypoints, anv_extensions_c, anv_extensions_h, sha1_h],
   include_directories : [
     inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
     inc_vulkan_wsi,
@@ -236,7 +238,8 @@ if with_tests
         include_directories : [
           inc_common, inc_intel, inc_compiler, inc_vulkan_util, inc_vulkan_wsi,
         ],
-      )
+      ),
+      suite : ['intel'],
     )
   endforeach
 endif

@@ -134,7 +134,7 @@ si_set_raster_config(struct radv_physical_device *physical_device,
 
 	ac_get_raster_config(&physical_device->rad_info,
 			     &raster_config,
-			     &raster_config_1);
+			     &raster_config_1, NULL);
 
 	/* Always use the default config when all backends are enabled
 	 * (or when we failed to determine the enabled backends).
@@ -278,8 +278,7 @@ si_emit_graphics(struct radv_physical_device *physical_device,
 		radeon_set_sh_reg(cs, R_00B21C_SPI_SHADER_PGM_RSRC3_GS,
 				  S_00B21C_CU_EN(0xffff) | S_00B21C_WAVE_LIMIT(0x3F));
 
-		if (physical_device->rad_info.num_good_compute_units /
-		    (physical_device->rad_info.max_se * physical_device->rad_info.max_sh_per_se) <= 4) {
+		if (physical_device->rad_info.num_good_cu_per_sh <= 4) {
 			/* Too few available compute units per SH. Disallowing
 			 * VS to run on CU0 could hurt us more than late VS
 			 * allocation would help.
@@ -306,9 +305,6 @@ si_emit_graphics(struct radv_physical_device *physical_device,
 
 	if (physical_device->rad_info.chip_class >= VI) {
 		uint32_t vgt_tess_distribution;
-		radeon_set_context_reg(cs, R_028424_CB_DCC_CONTROL,
-				       S_028424_OVERWRITE_COMBINER_MRT_SHARING_DISABLE(1) |
-				       S_028424_OVERWRITE_COMBINER_WATERMARK(4));
 
 		vgt_tess_distribution = S_028B50_ACCUM_ISOLINE(32) |
 			S_028B50_ACCUM_TRI(11) |
@@ -337,6 +333,7 @@ si_emit_graphics(struct radv_physical_device *physical_device,
 			pc_lines = 4096;
 			break;
 		case CHIP_RAVEN:
+		case CHIP_RAVEN2:
 			pc_lines = 1024;
 			break;
 		default:
@@ -516,16 +513,16 @@ si_write_scissors(struct radeon_cmdbuf *cs, int first,
 		VkRect2D scissor = si_intersect_scissor(&scissors[i], &viewport_scissor);
 
 		get_viewport_xform(viewports + i, scale, translate);
-		scale[0] = abs(scale[0]);
-		scale[1] = abs(scale[1]);
+		scale[0] = fabsf(scale[0]);
+		scale[1] = fabsf(scale[1]);
 
 		if (scale[0] < 0.5)
 			scale[0] = 0.5;
 		if (scale[1] < 0.5)
 			scale[1] = 0.5;
 
-		guardband_x = MIN2(guardband_x, (max_range - abs(translate[0])) / scale[0]);
-		guardband_y = MIN2(guardband_y, (max_range - abs(translate[1])) / scale[1]);
+		guardband_x = MIN2(guardband_x, (max_range - fabsf(translate[0])) / scale[0]);
+		guardband_y = MIN2(guardband_y, (max_range - fabsf(translate[1])) / scale[1]);
 
 		radeon_emit(cs, S_028250_TL_X(scissor.offset.x) |
 			    S_028250_TL_Y(scissor.offset.y) |
@@ -724,12 +721,15 @@ void si_cs_emit_write_event_eop(struct radeon_cmdbuf *cs,
 }
 
 void
-si_emit_wait_fence(struct radeon_cmdbuf *cs,
-		   uint64_t va, uint32_t ref,
-		   uint32_t mask)
+radv_cp_wait_mem(struct radeon_cmdbuf *cs, uint32_t op, uint64_t va,
+		 uint32_t ref, uint32_t mask)
 {
+	assert(op == WAIT_REG_MEM_EQUAL ||
+	       op == WAIT_REG_MEM_NOT_EQUAL ||
+	       op == WAIT_REG_MEM_GREATER_OR_EQUAL);
+
 	radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, false));
-	radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
+	radeon_emit(cs, op | WAIT_REG_MEM_MEM_SPACE(1));
 	radeon_emit(cs, va);
 	radeon_emit(cs, va >> 32);
 	radeon_emit(cs, ref); /* reference value */
@@ -874,13 +874,20 @@ si_cs_emit_cache_flush(struct radeon_cmdbuf *cs,
 					   EOP_DATA_SEL_VALUE_32BIT,
 					   flush_va, old_fence, *flush_cnt,
 					   gfx9_eop_bug_va);
-		si_emit_wait_fence(cs, flush_va, *flush_cnt, 0xffffffff);
+		radv_cp_wait_mem(cs, WAIT_REG_MEM_EQUAL, flush_va,
+				 *flush_cnt, 0xffffffff);
 	}
 
 	/* VGT state sync */
 	if (flush_bits & RADV_CMD_FLAG_VGT_FLUSH) {
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
+	}
+
+	/* VGT streamout state sync */
+	if (flush_bits & RADV_CMD_FLAG_VGT_STREAMOUT_SYNC) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_STREAMOUT_SYNC) | EVENT_INDEX(0));
 	}
 
 	/* Make sure ME is idle (it executes most packets) before continuing.
@@ -985,6 +992,11 @@ si_emit_cache_flush(struct radv_cmd_buffer *cmd_buffer)
 		radv_cmd_buffer_trace_emit(cmd_buffer);
 
 	cmd_buffer->state.flush_bits = 0;
+
+	/* If the driver used a compute shader for resetting a query pool, it
+	 * should be finished at this point.
+	 */
+	cmd_buffer->pending_reset_query = false;
 }
 
 /* sets the CP predication state using a boolean stored at va */
@@ -1214,6 +1226,8 @@ void si_cp_dma_buffer_copy(struct radv_cmd_buffer *cmd_buffer,
 		si_cp_dma_prepare(cmd_buffer, byte_count,
 				  size + skipped_size + realign_size,
 				  &dma_flags);
+
+		dma_flags &= ~CP_DMA_SYNC;
 
 		si_emit_cp_dma(cmd_buffer, main_dest_va, main_src_va,
 			       byte_count, dma_flags);

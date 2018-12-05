@@ -51,7 +51,7 @@
  * sizedwords:     size of const value buffer
  */
 static void
-fd5_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
+fd5_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		uint32_t regid, uint32_t offset, uint32_t sizedwords,
 		const uint32_t *dwords, struct pipe_resource *prsc)
 {
@@ -90,7 +90,7 @@ fd5_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
 }
 
 static void
-fd5_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
+fd5_emit_const_bo(struct fd_ringbuffer *ring, gl_shader_stage type, boolean write,
 		uint32_t regid, uint32_t num, struct pipe_resource **prscs, uint32_t *offsets)
 {
 	uint32_t anum = align(num, 2);
@@ -524,7 +524,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	emit_marker5(ring, 5);
 
-	if ((dirty & FD_DIRTY_FRAMEBUFFER) && !emit->key.binning_pass) {
+	if ((dirty & FD_DIRTY_FRAMEBUFFER) && !emit->binning_pass) {
 		unsigned char mrt_comp[A5XX_MAX_RENDER_TARGETS] = {0};
 
 		for (unsigned i = 0; i < A5XX_MAX_RENDER_TARGETS; i++) {
@@ -566,7 +566,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 			if (emit->no_lrz_write || !rsc->lrz || !rsc->lrz_valid)
 				gras_lrz_cntl = 0;
-			else if (emit->key.binning_pass && blend->lrz_write && zsa->lrz_write)
+			else if (emit->binning_pass && blend->lrz_write && zsa->lrz_write)
 				gras_lrz_cntl |= A5XX_GRAS_LRZ_CNTL_LRZ_WRITE;
 
 			OUT_PKT4(ring, REG_A5XX_GRAS_LRZ_CNTL, 1);
@@ -601,7 +601,8 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				COND(fragz && fp->frag_coord, A5XX_GRAS_SU_DEPTH_PLANE_CNTL_UNK1));
 	}
 
-	if (dirty & FD_DIRTY_SCISSOR) {
+	/* NOTE: scissor enabled bit is part of rasterizer state: */
+	if (dirty & (FD_DIRTY_SCISSOR | FD_DIRTY_RASTERIZER)) {
 		struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
 
 		OUT_PKT4(ring, REG_A5XX_GRAS_SC_SCREEN_SCISSOR_TL_0, 2);
@@ -684,7 +685,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		uint32_t posz_regid = ir3_find_output_regid(fp, FRAG_RESULT_DEPTH);
 		unsigned nr = pfb->nr_cbufs;
 
-		if (emit->key.binning_pass)
+		if (emit->binning_pass)
 			nr = 0;
 		else if (ctx->rasterizer->rasterizer_discard)
 			nr = 0;
@@ -700,10 +701,10 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 
 	ir3_emit_vs_consts(vp, ring, ctx, emit->info);
-	if (!emit->key.binning_pass)
+	if (!emit->binning_pass)
 		ir3_emit_fs_consts(fp, ring, ctx);
 
-	struct pipe_stream_output_info *info = &vp->shader->stream_output;
+	struct ir3_stream_output_info *info = &vp->shader->stream_output;
 	if (info->num_outputs) {
 		struct fd_streamout_stateobj *so = &ctx->streamout;
 

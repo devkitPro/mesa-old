@@ -30,30 +30,31 @@
 
 #include "util/u_upload_mgr.h"
 
-#include "freedreno_drmif.h"
-
 #include "freedreno_context.h"
 
-#include "ir3_shader.h"
+#include "ir3/ir3_shader.h"
 
 #include "a6xx.xml.h"
-
-struct fd6_streamout_state {
-	uint32_t ncomp[PIPE_MAX_SO_BUFFERS];
-	uint32_t prog[256/2];
-	uint32_t prog_count;
-	uint32_t vpc_so_buf_cntl;
-};
 
 struct fd6_context {
 	struct fd_context base;
 
 	struct fd_bo *vs_pvt_mem, *fs_pvt_mem;
 
-	/* This only needs to be 4 * num_of_pipes bytes (ie. 32 bytes).  We
-	 * could combine it with another allocation.
+	/* Two buffers related to hw binning / visibility stream (VSC).
+	 * Compared to previous generations
+	 *   (1) we cannot specify individual buffers per VSC, instead
+	 *       just a pitch and base address
+	 *   (2) there is a second smaller buffer, for something.. we
+	 *       also stash VSC_BIN_SIZE at end of 2nd buffer.
 	 */
-	struct fd_bo *vsc_size_mem;
+	struct fd_bo *vsc_data, *vsc_data2;
+
+// TODO annoyingly large sizes to prevent hangs with larger amounts
+// of geometry, like aquarium with max # of fish.  Need to figure
+// out how to calculate the required size.
+#define A6XX_VSC_DATA_PITCH  0x4400
+#define A6XX_VSC_DATA2_PITCH 0x10400
 
 	/* TODO not sure what this is for.. probably similar to
 	 * CACHE_FLUSH_TS on kernel side, where value gets written
@@ -61,6 +62,7 @@ struct fd6_context {
 	 * synchronize when the CP is running far ahead)
 	 */
 	struct fd_bo *blit_mem;
+	uint32_t seqno;
 
 	struct u_upload_mgr *border_color_uploader;
 	struct pipe_resource *border_color_buf;
@@ -90,10 +92,16 @@ struct fd6_context {
 	/* number of active samples-passed queries: */
 	int samples_passed_queries;
 
-	/* cached state about current emitted shader program (3d): */
-	/*{*/
-	struct fd6_streamout_state tf;
-	/*}*/
+	/* maps per-shader-stage state plus variant key to hw
+	 * program stateobj:
+	 */
+	struct ir3_cache *shader_cache;
+
+	/* cached stateobjs to avoid hashtable lookup when not dirty: */
+	const struct fd6_program_state *prog;
+
+	uint16_t tex_seqno;
+	struct hash_table *tex_cache;
 };
 
 static inline struct fd6_context *
@@ -104,18 +112,6 @@ fd6_context(struct fd_context *ctx)
 
 struct pipe_context *
 fd6_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags);
-
-/* helper for places where we need to stall CP to wait for previous draws: */
-static inline void
-fd6_emit_flush(struct fd_context *ctx, struct fd_ringbuffer *ring)
-{
-	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
-	OUT_RING(ring, CACHE_FLUSH_TS);
-	OUT_RELOCW(ring, fd6_context(ctx)->blit_mem, 0, 0, 0);  /* ADDR_LO/HI */
-	OUT_RING(ring, 0x00000000);
-
-	OUT_WFI5(ring);
-}
 
 static inline void
 emit_marker6(struct fd_ringbuffer *ring, int scratch_idx)

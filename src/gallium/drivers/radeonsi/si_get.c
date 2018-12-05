@@ -333,9 +333,12 @@ static float si_get_paramf(struct pipe_screen* pscreen, enum pipe_capf param)
 	switch (param) {
 	case PIPE_CAPF_MAX_LINE_WIDTH:
 	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
+		/* This depends on the quant mode, though the precise interactions
+		 * are unknown. */
+		return 2048;
 	case PIPE_CAPF_MAX_POINT_WIDTH:
 	case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-		return 8192.0f;
+		return SI_MAX_POINT_SIZE;
 	case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
 		return 16.0f;
 	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
@@ -577,10 +580,12 @@ static int si_get_video_param(struct pipe_screen *screen,
 		case PIPE_VIDEO_CAP_SUPPORTED:
 			return (codec == PIPE_VIDEO_FORMAT_MPEG4_AVC &&
 				(si_vce_is_fw_version_supported(sscreen) ||
-				sscreen->info.family == CHIP_RAVEN)) ||
+				 sscreen->info.family == CHIP_RAVEN ||
+				 sscreen->info.family == CHIP_RAVEN2)) ||
 				(profile == PIPE_VIDEO_PROFILE_HEVC_MAIN &&
 				(sscreen->info.family == CHIP_RAVEN ||
-				si_radeon_uvd_enc_supported(sscreen)));
+				 sscreen->info.family == CHIP_RAVEN2 ||
+				 si_radeon_uvd_enc_supported(sscreen)));
 		case PIPE_VIDEO_CAP_NPOT_TEXTURES:
 			return 1;
 		case PIPE_VIDEO_CAP_MAX_WIDTH:
@@ -628,6 +633,9 @@ static int si_get_video_param(struct pipe_screen *screen,
 				return profile == PIPE_VIDEO_PROFILE_HEVC_MAIN;
 			return false;
 		case PIPE_VIDEO_FORMAT_JPEG:
+			if (sscreen->info.family == CHIP_RAVEN ||
+			    sscreen->info.family == CHIP_RAVEN2)
+				return true;
 			if (sscreen->info.family < CHIP_CARRIZO || sscreen->info.family >= CHIP_VEGA10)
 				return false;
 			if (!(sscreen->info.drm_major == 3 && sscreen->info.drm_minor >= 19)) {

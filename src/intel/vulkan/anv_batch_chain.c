@@ -89,7 +89,6 @@ anv_reloc_list_init_clone(struct anv_reloc_list *list,
              list->array_length * sizeof(*list->relocs));
       memcpy(list->reloc_bos, other_list->reloc_bos,
              list->array_length * sizeof(*list->reloc_bos));
-      struct set_entry *entry;
       set_foreach(other_list->deps, entry) {
          _mesa_set_add_pre_hashed(list->deps, entry->hash, entry->key);
       }
@@ -205,7 +204,6 @@ anv_reloc_list_append(struct anv_reloc_list *list,
 
    list->num_relocs += other->num_relocs;
 
-   struct set_entry *entry;
    set_foreach(other->deps, entry) {
       _mesa_set_add_pre_hashed(list->deps, entry->hash, entry->key);
    }
@@ -894,8 +892,17 @@ anv_cmd_buffer_end_batch_buffer(struct anv_cmd_buffer *cmd_buffer)
           * It doesn't matter where it points now so long as has a valid
           * relocation.  We'll adjust it later as part of the chaining
           * process.
+          *
+          * We set the end of the batch a little short so we would be sure we
+          * have room for the chaining command.  Since we're about to emit the
+          * chaining command, let's set it back where it should go.
           */
+         cmd_buffer->batch.end += GEN8_MI_BATCH_BUFFER_START_length * 4;
+         assert(cmd_buffer->batch.start == batch_bo->bo.map);
+         assert(cmd_buffer->batch.end == batch_bo->bo.map + batch_bo->bo.size);
+
          emit_batch_buffer_start(cmd_buffer, &batch_bo->bo, 0);
+         assert(cmd_buffer->batch.start == batch_bo->bo.map);
       } else {
          cmd_buffer->exec_mode = ANV_CMD_BUFFER_EXEC_MODE_COPY_AND_CHAIN;
       }
@@ -1088,7 +1095,7 @@ anv_execbuf_add_bo(struct anv_execbuf *exec,
       obj->relocs_ptr = 0;
       obj->alignment = 0;
       obj->offset = bo->offset;
-      obj->flags = bo->flags | extra_flags;
+      obj->flags = (bo->flags & ~ANV_BO_FLAG_MASK) | extra_flags;
       obj->rsvd1 = 0;
       obj->rsvd2 = 0;
    }
@@ -1126,7 +1133,6 @@ anv_execbuf_add_bo(struct anv_execbuf *exec,
          if (bos == NULL)
             return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-         struct set_entry *entry;
          struct anv_bo **bo = bos;
          set_foreach(relocs->deps, entry) {
             *bo++ = (void *)entry->key;

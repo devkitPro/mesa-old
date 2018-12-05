@@ -1198,6 +1198,98 @@ nir_foreach_src(nir_instr *instr, nir_foreach_src_cb cb, void *state)
    return nir_foreach_dest(instr, visit_dest_indirect, &dest_state);
 }
 
+int64_t
+nir_src_comp_as_int(nir_src src, unsigned comp)
+{
+   assert(nir_src_is_const(src));
+   nir_load_const_instr *load = nir_instr_as_load_const(src.ssa->parent_instr);
+
+   assert(comp < load->def.num_components);
+   switch (load->def.bit_size) {
+   case 8:  return load->value.i8[comp];
+   case 16: return load->value.i16[comp];
+   case 32: return load->value.i32[comp];
+   case 64: return load->value.i64[comp];
+   default:
+      unreachable("Invalid bit size");
+   }
+}
+
+uint64_t
+nir_src_comp_as_uint(nir_src src, unsigned comp)
+{
+   assert(nir_src_is_const(src));
+   nir_load_const_instr *load = nir_instr_as_load_const(src.ssa->parent_instr);
+
+   assert(comp < load->def.num_components);
+   switch (load->def.bit_size) {
+   case 8:  return load->value.u8[comp];
+   case 16: return load->value.u16[comp];
+   case 32: return load->value.u32[comp];
+   case 64: return load->value.u64[comp];
+   default:
+      unreachable("Invalid bit size");
+   }
+}
+
+bool
+nir_src_comp_as_bool(nir_src src, unsigned comp)
+{
+   assert(nir_src_is_const(src));
+   nir_load_const_instr *load = nir_instr_as_load_const(src.ssa->parent_instr);
+
+   assert(comp < load->def.num_components);
+   assert(load->def.bit_size == 32);
+   assert(load->value.u32[comp] == NIR_TRUE ||
+          load->value.u32[comp] == NIR_FALSE);
+
+   return load->value.u32[comp];
+}
+
+double
+nir_src_comp_as_float(nir_src src, unsigned comp)
+{
+   assert(nir_src_is_const(src));
+   nir_load_const_instr *load = nir_instr_as_load_const(src.ssa->parent_instr);
+
+   assert(comp < load->def.num_components);
+   switch (load->def.bit_size) {
+   case 16: return _mesa_half_to_float(load->value.u16[comp]);
+   case 32: return load->value.f32[comp];
+   case 64: return load->value.f64[comp];
+   default:
+      unreachable("Invalid bit size");
+   }
+}
+
+int64_t
+nir_src_as_int(nir_src src)
+{
+   assert(nir_src_num_components(src) == 1);
+   return nir_src_comp_as_int(src, 0);
+}
+
+uint64_t
+nir_src_as_uint(nir_src src)
+{
+   assert(nir_src_num_components(src) == 1);
+   return nir_src_comp_as_uint(src, 0);
+}
+
+bool
+nir_src_as_bool(nir_src src)
+{
+   assert(nir_src_num_components(src) == 1);
+   return nir_src_comp_as_bool(src, 0);
+}
+
+double
+nir_src_as_float(nir_src src)
+{
+   assert(nir_src_num_components(src) == 1);
+   return nir_src_comp_as_float(src, 0);
+}
+
 nir_const_value *
 nir_src_as_const_value(nir_src src)
 {
@@ -1438,13 +1530,7 @@ nir_ssa_def_components_read(const nir_ssa_def *def)
          nir_alu_src *alu_src = exec_node_data(nir_alu_src, use, src);
          int src_idx = alu_src - &alu->src[0];
          assert(src_idx >= 0 && src_idx < nir_op_infos[alu->op].num_inputs);
-
-         for (unsigned c = 0; c < NIR_MAX_VEC_COMPONENTS; c++) {
-            if (!nir_alu_instr_channel_used(alu, src_idx, c))
-               continue;
-
-            read_mask |= (1 << alu_src->swizzle[c]);
-         }
+         read_mask |= nir_alu_instr_src_read_mask(alu, src_idx);
       } else {
          return (1 << def->num_components) - 1;
       }

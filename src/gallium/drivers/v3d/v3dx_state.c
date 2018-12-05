@@ -481,17 +481,17 @@ v3d_set_framebuffer_state(struct pipe_context *pctx,
                 struct pipe_surface *cbuf = v3d->framebuffer.cbufs[i];
                 if (!cbuf)
                         continue;
+                struct v3d_surface *v3d_cbuf = v3d_surface(cbuf);
 
                 const struct util_format_description *desc =
                         util_format_description(cbuf->format);
 
                 /* For BGRA8 formats (DRI window system default format), we
-                 * need to swap R and B, since the HW's format is RGBA8.
+                 * need to swap R and B, since the HW's format is RGBA8.  On
+                 * V3D 4.1+, the RCL can swap R and B on load/store.
                  */
-                if (desc->swizzle[0] == PIPE_SWIZZLE_Z &&
-                    cbuf->format != PIPE_FORMAT_B5G6R5_UNORM) {
+                if (v3d->screen->devinfo.ver < 41 && v3d_cbuf->swap_rb)
                         v3d->swap_color_rb |= 1 << i;
-                }
 
                 if (desc->swizzle[3] == PIPE_SWIZZLE_1)
                         v3d->blend_dst_alpha_one |= 1 << i;

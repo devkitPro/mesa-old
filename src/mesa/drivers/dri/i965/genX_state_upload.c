@@ -620,7 +620,7 @@ genX(emit_vertices)(struct brw_context *brw)
    for (unsigned i = 0; i < brw->vb.nr_enabled; i++) {
       struct brw_vertex_element *input = brw->vb.enabled[i];
       const struct gl_array_attributes *glattrib = input->glattrib;
-      uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
 
       if (uploads_needed(format, input->is_dual_slot) > 1)
          nr_elements++;
@@ -713,7 +713,7 @@ genX(emit_vertices)(struct brw_context *brw)
    for (i = 0; i < brw->vb.nr_enabled; i++) {
       const struct brw_vertex_element *input = brw->vb.enabled[i];
       const struct gl_array_attributes *glattrib = input->glattrib;
-      uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
       uint32_t comp0 = VFCOMP_STORE_SRC;
       uint32_t comp1 = VFCOMP_STORE_SRC;
       uint32_t comp2 = VFCOMP_STORE_SRC;
@@ -756,16 +756,16 @@ genX(emit_vertices)(struct brw_context *brw)
 
          const struct gl_array_attributes *glattrib = input->glattrib;
          const int size = (GEN_GEN < 8 && is_passthru_format(format)) ?
-            upload_format_size(upload_format) : glattrib->Size;
+            upload_format_size(upload_format) : glattrib->Format.Size;
 
          switch (size) {
             case 0: comp0 = VFCOMP_STORE_0;
             case 1: comp1 = VFCOMP_STORE_0;
             case 2: comp2 = VFCOMP_STORE_0;
             case 3:
-               if (GEN_GEN >= 8 && glattrib->Doubles) {
+               if (GEN_GEN >= 8 && glattrib->Format.Doubles) {
                   comp3 = VFCOMP_STORE_0;
-               } else if (glattrib->Integer) {
+               } else if (glattrib->Format.Integer) {
                   comp3 = VFCOMP_STORE_1_INT;
                } else {
                   comp3 = VFCOMP_STORE_1_FP;
@@ -790,7 +790,7 @@ genX(emit_vertices)(struct brw_context *brw)
           *     to be specified as VFCOMP_STORE_0 in order to output a 256-bit
           *     vertex element."
           */
-         if (glattrib->Doubles && !input->is_dual_slot) {
+         if (glattrib->Format.Doubles && !input->is_dual_slot) {
             /* Store vertex elements which correspond to double and dvec2 vertex
              * shader inputs as 128-bit vertex elements, instead of 256-bits.
              */
@@ -877,7 +877,7 @@ genX(emit_vertices)(struct brw_context *brw)
 #if GEN_GEN >= 6
    if (gen6_edgeflag_input) {
       const struct gl_array_attributes *glattrib = gen6_edgeflag_input->glattrib;
-      const uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      const uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
 
       struct GENX(VERTEX_ELEMENT_STATE) elem_state = {
          .Valid = true,
@@ -2004,7 +2004,8 @@ genX(upload_wm)(struct brw_context *brw)
       if (wm_prog_data->base.use_alt_mode)
          wm.FloatingPointMode = FLOATING_POINT_MODE_Alternate;
 
-      wm.SamplerCount = GEN_GEN == 5 ?
+      /* WA_1606682166 */
+      wm.SamplerCount = (GEN_GEN == 5 || GEN_GEN == 11) ?
          0 : DIV_ROUND_UP(stage_state->sampler_count, 4);
 
       wm.BindingTableEntryCount =
@@ -2166,7 +2167,10 @@ static const struct brw_tracked_state genX(wm_state) = {
 
 #define INIT_THREAD_DISPATCH_FIELDS(pkt, prefix) \
    pkt.KernelStartPointer = KSP(brw, stage_state->prog_offset);           \
+   /* WA_1606682166 */                                                    \
    pkt.SamplerCount       =                                               \
+      GEN_GEN == 11 ?                                                     \
+      0 :                                                                 \
       DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);          \
    /* Gen 11 workarounds table #2056 WABTPPrefetchDisable suggests to     \
     * disable prefetching of binding tables in A0 and B0 steppings.       \
@@ -3051,7 +3055,26 @@ set_blend_entry_bits(struct brw_context *brw, BLEND_ENTRY_GENXML *entry, int i,
          dstA = fix_dual_blend_alpha_to_one(dstA);
       }
 
-      entry->ColorBufferBlendEnable = true;
+      /* BRW_NEW_FS_PROG_DATA */
+      const struct brw_wm_prog_data *wm_prog_data =
+         brw_wm_prog_data(brw->wm.base.prog_data);
+
+      /* The Dual Source Blending documentation says:
+       *
+       * "If SRC1 is included in a src/dst blend factor and
+       * a DualSource RT Write message is not used, results
+       * are UNDEFINED. (This reflects the same restriction in DX APIs,
+       * where undefined results are produced if “o1” is not written
+       * by a PS – there are no default values defined).
+       * If SRC1 is not included in a src/dst blend factor,
+       * dual source blending must be disabled."
+       *
+       * There is no way to gracefully fix this undefined situation
+       * so we just disable the blending to prevent possible issues.
+       */
+      entry->ColorBufferBlendEnable =
+         !ctx->Color.Blend[0]._UsesDualSrc || wm_prog_data->dual_src_blend;
+
       entry->DestinationBlendFactor = blend_factor(dstRGB);
       entry->SourceBlendFactor = blend_factor(srcRGB);
       entry->DestinationAlphaBlendFactor = blend_factor(dstA);
@@ -3197,6 +3220,7 @@ static const struct brw_tracked_state genX(blend_state) = {
               _NEW_MULTISAMPLE,
       .brw = BRW_NEW_BATCH |
              BRW_NEW_BLORP |
+             BRW_NEW_FS_PROG_DATA |
              BRW_NEW_STATE_BASE_ADDRESS,
    },
    .emit = genX(upload_blend_state),
@@ -3977,8 +4001,13 @@ genX(upload_ps)(struct brw_context *brw)
        */
       ps.VectorMaskEnable = GEN_GEN >= 8;
 
-      ps.SamplerCount =
-         DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);
+      /* WA_1606682166:
+       * "Incorrect TDL's SSP address shift in SARB for 16:6 & 18:8 modes.
+       * Disable the Sampler state prefetch functionality in the SARB by
+       * programming 0xB000[30] to '1'."
+       */
+      ps.SamplerCount = GEN_GEN == 11 ?
+         0 : DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);
 
       /* BRW_NEW_FS_PROG_DATA */
       /* Gen 11 workarounds table #2056 WABTPPrefetchDisable suggests to disable
@@ -4829,7 +4858,25 @@ genX(upload_ps_blend)(struct brw_context *brw)
             dstA = fix_dual_blend_alpha_to_one(dstA);
          }
 
-         pb.ColorBufferBlendEnable = true;
+         /* BRW_NEW_FS_PROG_DATA */
+         const struct brw_wm_prog_data *wm_prog_data =
+            brw_wm_prog_data(brw->wm.base.prog_data);
+
+         /* The Dual Source Blending documentation says:
+          *
+          * "If SRC1 is included in a src/dst blend factor and
+          * a DualSource RT Write message is not used, results
+          * are UNDEFINED. (This reflects the same restriction in DX APIs,
+          * where undefined results are produced if “o1” is not written
+          * by a PS – there are no default values defined).
+          * If SRC1 is not included in a src/dst blend factor,
+          * dual source blending must be disabled."
+          *
+          * There is no way to gracefully fix this undefined situation
+          * so we just disable the blending to prevent possible issues.
+          */
+         pb.ColorBufferBlendEnable =
+            !color->Blend[0]._UsesDualSrc || wm_prog_data->dual_src_blend;
          pb.SourceAlphaBlendFactor = brw_translate_blend_factor(srcA);
          pb.DestinationAlphaBlendFactor = brw_translate_blend_factor(dstA);
          pb.SourceBlendFactor = brw_translate_blend_factor(srcRGB);
@@ -4848,7 +4895,8 @@ static const struct brw_tracked_state genX(ps_blend) = {
               _NEW_MULTISAMPLE,
       .brw = BRW_NEW_BLORP |
              BRW_NEW_CONTEXT |
-             BRW_NEW_FRAGMENT_PROGRAM,
+             BRW_NEW_FRAGMENT_PROGRAM |
+             BRW_NEW_FS_PROG_DATA,
    },
    .emit = genX(upload_ps_blend)
 };

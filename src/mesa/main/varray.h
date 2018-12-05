@@ -29,6 +29,12 @@
 
 #include "bufferobj.h"
 
+void
+_mesa_set_vertex_format(struct gl_vertex_format *vertex_format,
+                        GLubyte size, GLenum16 type, GLenum16 format,
+                        GLboolean normalized, GLboolean integer,
+                        GLboolean doubles);
+
 
 /**
  * Returns a pointer to the vertex attribute data in a client array,
@@ -62,15 +68,33 @@ _mesa_update_array_format(struct gl_context *ctx,
                           GLuint relativeOffset);
 
 extern void
+_mesa_enable_vertex_array_attribs(struct gl_context *ctx,
+                                 struct gl_vertex_array_object *vao,
+                                 GLbitfield attrib_bits);
+
+static inline void
 _mesa_enable_vertex_array_attrib(struct gl_context *ctx,
                                  struct gl_vertex_array_object *vao,
-                                 gl_vert_attrib attrib);
+                                 gl_vert_attrib attrib)
+{
+   assert(attrib < VERT_ATTRIB_MAX);
+   _mesa_enable_vertex_array_attribs(ctx, vao, VERT_BIT(attrib));
+}
 
 
 extern void
+_mesa_disable_vertex_array_attribs(struct gl_context *ctx,
+                                   struct gl_vertex_array_object *vao,
+                                   GLbitfield attrib_bits);
+
+static inline void
 _mesa_disable_vertex_array_attrib(struct gl_context *ctx,
                                   struct gl_vertex_array_object *vao,
-                                  gl_vert_attrib attrib);
+                                  gl_vert_attrib attrib)
+{
+   assert(attrib < VERT_ATTRIB_MAX);
+   _mesa_disable_vertex_array_attribs(ctx, vao, VERT_BIT(attrib));
+}
 
 
 extern void
@@ -271,64 +295,11 @@ _mesa_InterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer);
 
 
 extern void GLAPIENTRY
-_mesa_MultiDrawArrays(GLenum mode, const GLint *first,
-                      const GLsizei *count, GLsizei primcount);
-
-extern void GLAPIENTRY
-_mesa_MultiDrawElementsEXT(GLenum mode, const GLsizei *count, GLenum type,
-                           const GLvoid **indices, GLsizei primcount);
-
-extern void GLAPIENTRY
-_mesa_MultiDrawElementsBaseVertex(GLenum mode,
-                                  const GLsizei *count, GLenum type,
-                                  const GLvoid **indices, GLsizei primcount,
-                                  const GLint *basevertex);
-
-extern void GLAPIENTRY
-_mesa_MultiModeDrawArraysIBM(const GLenum * mode, const GLint * first,
-                             const GLsizei * count,
-                             GLsizei primcount, GLint modestride );
-
-
-extern void GLAPIENTRY
-_mesa_MultiModeDrawElementsIBM(const GLenum * mode, const GLsizei * count,
-                               GLenum type, const GLvoid * const * indices,
-                               GLsizei primcount, GLint modestride );
-
-extern void GLAPIENTRY
 _mesa_LockArraysEXT(GLint first, GLsizei count);
 
 extern void GLAPIENTRY
 _mesa_UnlockArraysEXT(void);
 
-
-extern void GLAPIENTRY
-_mesa_DrawArrays(GLenum mode, GLint first, GLsizei count);
-
-extern void GLAPIENTRY
-_mesa_DrawArraysInstanced(GLenum mode, GLint first, GLsizei count,
-                          GLsizei primcount);
-
-extern void GLAPIENTRY
-_mesa_DrawElements(GLenum mode, GLsizei count, GLenum type,
-                   const GLvoid *indices);
-
-extern void GLAPIENTRY
-_mesa_DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count,
-                        GLenum type, const GLvoid *indices);
-
-extern void GLAPIENTRY
-_mesa_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
-                             const GLvoid *indices, GLint basevertex);
-
-extern void GLAPIENTRY
-_mesa_DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end,
-                                  GLsizei count, GLenum type,
-                                  const GLvoid *indices,
-                                  GLint basevertex);
-
-extern void GLAPIENTRY
-_mesa_DrawTransformFeedback(GLenum mode, GLuint name);
 
 void GLAPIENTRY
 _mesa_PrimitiveRestartIndex_no_error(GLuint index);

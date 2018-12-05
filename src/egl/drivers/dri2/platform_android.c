@@ -72,6 +72,7 @@ static const struct droid_yuv_format droid_yuv_formats[] = {
    { HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,   0, 2, __DRI_IMAGE_FOURCC_NV12 },
    { HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,   0, 1, __DRI_IMAGE_FOURCC_YUV420 },
    { HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,   1, 1, __DRI_IMAGE_FOURCC_YVU420 },
+   { HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,   1, 1, __DRI_IMAGE_FOURCC_AYUV },
 };
 
 static int
@@ -676,10 +677,6 @@ droid_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
-
-   if (dri2_surf->base.Type != EGL_WINDOW_BIT)
-      return EGL_TRUE;
-
    const bool has_mutable_rb = _eglSurfaceHasMutableRenderBuffer(draw);
 
    /* From the EGL_KHR_mutable_render_buffer spec (v12):
@@ -1530,6 +1527,7 @@ droid_open_device(_EGLDisplay *disp)
 EGLBoolean
 dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
 {
+   _EGLDevice *dev;
    struct dri2_egl_display *dri2_dpy;
    const char *err;
    int ret;
@@ -1537,8 +1535,6 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
    /* Not supported yet */
    if (disp->Options.ForceSoftware)
       return EGL_FALSE;
-
-   loader_set_logger(_eglLog);
 
    dri2_dpy = calloc(1, sizeof(*dri2_dpy));
    if (!dri2_dpy)
@@ -1562,6 +1558,14 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *disp)
       err = "DRI2: failed to open device";
       goto cleanup;
    }
+
+   dev = _eglAddDevice(dri2_dpy->fd, false);
+   if (!dev) {
+      err = "DRI2: failed to find EGLDevice";
+      goto cleanup;
+   }
+
+   disp->Device = dev;
 
    if (!dri2_setup_extensions(disp)) {
       err = "DRI2: failed to setup extensions";

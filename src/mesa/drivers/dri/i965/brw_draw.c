@@ -303,16 +303,16 @@ brw_merge_inputs(struct brw_context *brw)
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
        */
       while (mask) {
-         const struct gl_array_attributes *glattrib;
+         const struct gl_vertex_format *glformat;
          uint8_t wa_flags = 0;
 
          i = u_bit_scan64(&mask);
-         glattrib = brw->vb.inputs[i].glattrib;
+         glformat = &brw->vb.inputs[i].glattrib->Format;
 
-         switch (glattrib->Type) {
+         switch (glformat->Type) {
 
          case GL_FIXED:
-            wa_flags = glattrib->Size;
+            wa_flags = glformat->Size;
             break;
 
          case GL_INT_2_10_10_10_REV:
@@ -320,12 +320,12 @@ brw_merge_inputs(struct brw_context *brw)
             /* fallthough */
 
          case GL_UNSIGNED_INT_2_10_10_10_REV:
-            if (glattrib->Format == GL_BGRA)
+            if (glformat->Format == GL_BGRA)
                wa_flags |= BRW_ATTRIB_WA_BGRA;
 
-            if (glattrib->Normalized)
+            if (glformat->Normalized)
                wa_flags |= BRW_ATTRIB_WA_NORMALIZE;
-            else if (!glattrib->Integer)
+            else if (!glformat->Integer)
                wa_flags |= BRW_ATTRIB_WA_SCALE;
 
             break;
@@ -885,7 +885,7 @@ brw_draw_single_prim(struct gl_context *ctx,
 {
    struct brw_context *brw = brw_context(ctx);
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   bool fail_next = false;
+   bool fail_next;
 
    /* Flag BRW_NEW_DRAW_CALL on every draw.  This allows us to have
     * atoms that happen on every draw call.
@@ -898,6 +898,7 @@ brw_draw_single_prim(struct gl_context *ctx,
    intel_batchbuffer_require_space(brw, 1500);
    brw_require_statebuffer_space(brw, 2400);
    intel_batchbuffer_save_state(brw);
+   fail_next = intel_batchbuffer_saved_state_is_empty(brw);
 
    if (brw->num_instances != prim->num_instances ||
        brw->basevertex != prim->basevertex ||

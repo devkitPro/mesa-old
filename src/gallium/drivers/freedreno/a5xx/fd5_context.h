@@ -29,11 +29,9 @@
 
 #include "util/u_upload_mgr.h"
 
-#include "freedreno_drmif.h"
-
 #include "freedreno_context.h"
 
-#include "ir3_shader.h"
+#include "ir3/ir3_shader.h"
 
 struct fd5_context {
 	struct fd_context base;

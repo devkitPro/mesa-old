@@ -665,7 +665,7 @@ static struct pipe_query *si_query_hw_create(struct si_screen *sscreen,
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		query->result_size = 16 * sscreen->info.num_render_backends;
 		query->result_size += 16; /* for the fence + alignment */
-		query->num_cs_dw_end = 6 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 6 + si_cp_write_fence_dwords(sscreen);
 		break;
 	case SI_QUERY_TIME_ELAPSED_SDMA:
 		/* GET_GLOBAL_TIMESTAMP only works if the offset is a multiple of 32. */
@@ -674,11 +674,11 @@ static struct pipe_query *si_query_hw_create(struct si_screen *sscreen,
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		query->result_size = 24;
-		query->num_cs_dw_end = 8 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 8 + si_cp_write_fence_dwords(sscreen);
 		break;
 	case PIPE_QUERY_TIMESTAMP:
 		query->result_size = 16;
-		query->num_cs_dw_end = 8 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 8 + si_cp_write_fence_dwords(sscreen);
 		query->flags = SI_QUERY_HW_FLAG_NO_START;
 		break;
 	case PIPE_QUERY_PRIMITIVES_EMITTED:
@@ -699,7 +699,7 @@ static struct pipe_query *si_query_hw_create(struct si_screen *sscreen,
 		/* 11 values on GCN. */
 		query->result_size = 11 * 16;
 		query->result_size += 8; /* for the fence + alignment */
-		query->num_cs_dw_end = 6 + si_gfx_write_fence_dwords(sscreen);
+		query->num_cs_dw_end = 6 + si_cp_write_fence_dwords(sscreen);
 		break;
 	default:
 		assert(0);
@@ -793,17 +793,10 @@ static void si_query_hw_do_emit_start(struct si_context *sctx,
 			emit_sample_streamout(cs, va + 32 * stream, stream);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
-		/* Write the timestamp from the CP not waiting for
-		 * outstanding draws (top-of-pipe).
-		 */
-		radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
-		radeon_emit(cs, COPY_DATA_COUNT_SEL |
-				COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
-				COPY_DATA_DST_SEL(COPY_DATA_MEM_ASYNC));
-		radeon_emit(cs, 0);
-		radeon_emit(cs, 0);
-		radeon_emit(cs, va);
-		radeon_emit(cs, va >> 32);
+		si_cp_release_mem(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
+				  EOP_DST_SEL_MEM, EOP_INT_SEL_NONE,
+				  EOP_DATA_SEL_TIMESTAMP, NULL, va,
+				  0, query->b.type);
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -890,9 +883,10 @@ static void si_query_hw_do_emit_stop(struct si_context *sctx,
 		va += 8;
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
-		si_gfx_write_event_eop(sctx, V_028A90_BOTTOM_OF_PIPE_TS,
-				       0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
-				       0, query->b.type);
+		si_cp_release_mem(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
+				  EOP_DST_SEL_MEM, EOP_INT_SEL_NONE,
+				  EOP_DATA_SEL_TIMESTAMP, NULL, va,
+				  0, query->b.type);
 		fence_va = va + 8;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS: {
@@ -913,11 +907,13 @@ static void si_query_hw_do_emit_stop(struct si_context *sctx,
 	radeon_add_to_buffer_list(sctx, sctx->gfx_cs, query->buffer.buf, RADEON_USAGE_WRITE,
 				  RADEON_PRIO_QUERY);
 
-	if (fence_va)
-		si_gfx_write_event_eop(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
-				       EOP_DATA_SEL_VALUE_32BIT,
-				       query->buffer.buf, fence_va, 0x80000000,
-				       query->b.type);
+	if (fence_va) {
+		si_cp_release_mem(sctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
+				  EOP_DST_SEL_MEM, EOP_INT_SEL_NONE,
+				  EOP_DATA_SEL_VALUE_32BIT,
+				  query->buffer.buf, fence_va, 0x80000000,
+				  query->b.type);
+	}
 }
 
 static void si_query_hw_emit_stop(struct si_context *sctx,
@@ -1575,7 +1571,7 @@ static void si_query_hw_get_result_resource(struct si_context *sctx,
 			va = qbuf->buf->gpu_address + qbuf->results_end - query->result_size;
 			va += params.fence_offset;
 
-			si_gfx_wait_fence(sctx, va, 0x80000000, 0x80000000);
+			si_cp_wait_mem(sctx, va, 0x80000000, 0x80000000, 0);
 		}
 
 		sctx->b.launch_grid(&sctx->b, &grid);

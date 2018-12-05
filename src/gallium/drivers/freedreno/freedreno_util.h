@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -29,8 +27,8 @@
 #ifndef FREEDRENO_UTIL_H_
 #define FREEDRENO_UTIL_H_
 
-#include <freedreno_drmif.h>
-#include <freedreno_ringbuffer.h>
+#include "drm/freedreno_drmif.h"
+#include "drm/freedreno_ringbuffer.h"
 
 #include "pipe/p_format.h"
 #include "pipe/p_state.h"
@@ -72,7 +70,7 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_NOBYPASS 0x0040
 #define FD_DBG_FRAGHALF 0x0080
 #define FD_DBG_NOBIN    0x0100
-#define FD_DBG_OPTMSGS  0x0200
+/* unused 0x0200 */
 #define FD_DBG_GLSL120  0x0400
 #define FD_DBG_SHADERDB 0x0800
 #define FD_DBG_FLUSH    0x1000
@@ -86,6 +84,7 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_HIPRIO 0x100000
 #define FD_DBG_TTILE  0x200000
 #define FD_DBG_PERFC  0x400000
+#define FD_DBG_SOFTPIN 0x800000
 
 extern int fd_mesa_debug;
 extern bool fd_binning_enabled;
@@ -115,15 +114,19 @@ static inline uint32_t DRAW(enum pc_di_primtype prim_type,
 }
 
 static inline uint32_t DRAW_A20X(enum pc_di_primtype prim_type,
+		enum pc_di_face_cull_sel faceness_cull_select,
 		enum pc_di_src_sel source_select, enum pc_di_index_size index_size,
-		enum pc_di_vis_cull_mode vis_cull_mode,
+		bool pre_fetch_cull_enable,
+		bool grp_cull_enable,
 		uint16_t count)
 {
 	return (prim_type         << 0) |
 			(source_select     << 6) |
+			(faceness_cull_select << 8) |
 			((index_size & 1)  << 11) |
 			((index_size >> 1) << 13) |
-			(vis_cull_mode     << 9) |
+			(pre_fetch_cull_enable << 14) |
+			(grp_cull_enable << 15) |
 			(count         << 16);
 }
 
@@ -195,6 +198,18 @@ fd_half_precision(struct pipe_framebuffer_state *pfb)
 	return true;
 }
 
+/* Note sure if this is same on all gens, but seems to be same on the later
+ * gen's
+ */
+static inline unsigned
+fd_calc_guardband(unsigned x)
+{
+	float l = log2(x);
+	if (l <= 8)
+		return 511;
+	return 511 - ((l - 8) * 65);
+}
+
 #define LOG_DWORDS 0
 
 static inline void emit_marker(struct fd_ringbuffer *ring, int scratch_idx);
@@ -204,7 +219,7 @@ OUT_RING(struct fd_ringbuffer *ring, uint32_t data)
 {
 	if (LOG_DWORDS) {
 		DBG("ring[%p]: OUT_RING   %04x:  %08x", ring,
-				(uint32_t)(ring->cur - ring->last_start), data);
+				(uint32_t)(ring->cur - ring->start), data);
 	}
 	fd_ringbuffer_emit(ring, data);
 }
@@ -216,7 +231,7 @@ OUT_RINGP(struct fd_ringbuffer *ring, uint32_t data,
 {
 	if (LOG_DWORDS) {
 		DBG("ring[%p]: OUT_RINGP  %04x:  %08x", ring,
-				(uint32_t)(ring->cur - ring->last_start), data);
+				(uint32_t)(ring->cur - ring->start), data);
 	}
 	util_dynarray_append(buf, struct fd_cs_patch, ((struct fd_cs_patch){
 		.cs  = ring->cur++,
@@ -234,10 +249,10 @@ OUT_RELOC(struct fd_ringbuffer *ring, struct fd_bo *bo,
 {
 	if (LOG_DWORDS) {
 		DBG("ring[%p]: OUT_RELOC   %04x:  %p+%u << %d", ring,
-				(uint32_t)(ring->cur - ring->last_start), bo, offset, shift);
+				(uint32_t)(ring->cur - ring->start), bo, offset, shift);
 	}
 	debug_assert(offset < fd_bo_size(bo));
-	fd_ringbuffer_reloc2(ring, &(struct fd_reloc){
+	fd_ringbuffer_reloc(ring, &(struct fd_reloc){
 		.bo = bo,
 		.flags = FD_RELOC_READ,
 		.offset = offset,
@@ -253,10 +268,10 @@ OUT_RELOCW(struct fd_ringbuffer *ring, struct fd_bo *bo,
 {
 	if (LOG_DWORDS) {
 		DBG("ring[%p]: OUT_RELOCW  %04x:  %p+%u << %d", ring,
-				(uint32_t)(ring->cur - ring->last_start), bo, offset, shift);
+				(uint32_t)(ring->cur - ring->start), bo, offset, shift);
 	}
 	debug_assert(offset < fd_bo_size(bo));
-	fd_ringbuffer_reloc2(ring, &(struct fd_reloc){
+	fd_ringbuffer_reloc(ring, &(struct fd_reloc){
 		.bo = bo,
 		.flags = FD_RELOC_READ | FD_RELOC_WRITE,
 		.offset = offset,
@@ -274,22 +289,13 @@ OUT_RB(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
 
 static inline void BEGIN_RING(struct fd_ringbuffer *ring, uint32_t ndwords)
 {
-	if (ring->cur + ndwords >= ring->end)
+	if (ring->cur + ndwords > ring->end)
 		fd_ringbuffer_grow(ring, ndwords);
-}
-
-static inline uint32_t
-__gpu_id(struct fd_ringbuffer *ring)
-{
-	uint64_t val;
-	fd_pipe_get_param(ring->pipe, FD_GPU_ID, &val);
-	return val;
 }
 
 static inline void
 OUT_PKT0(struct fd_ringbuffer *ring, uint16_t regindx, uint16_t cnt)
 {
-	debug_assert(__gpu_id(ring) < 500);
 	BEGIN_RING(ring, cnt+1);
 	OUT_RING(ring, CP_TYPE0_PKT | ((cnt-1) << 16) | (regindx & 0x7FFF));
 }
@@ -297,7 +303,6 @@ OUT_PKT0(struct fd_ringbuffer *ring, uint16_t regindx, uint16_t cnt)
 static inline void
 OUT_PKT2(struct fd_ringbuffer *ring)
 {
-	debug_assert(__gpu_id(ring) < 500);
 	BEGIN_RING(ring, 1);
 	OUT_RING(ring, CP_TYPE2_PKT);
 }
@@ -305,7 +310,6 @@ OUT_PKT2(struct fd_ringbuffer *ring)
 static inline void
 OUT_PKT3(struct fd_ringbuffer *ring, uint8_t opcode, uint16_t cnt)
 {
-	debug_assert(__gpu_id(ring) < 500);
 	BEGIN_RING(ring, cnt+1);
 	OUT_RING(ring, CP_TYPE3_PKT | ((cnt-1) << 16) | ((opcode & 0xFF) << 8));
 }
@@ -368,8 +372,6 @@ __OUT_IB(struct fd_ringbuffer *ring, bool prefetch, struct fd_ringbuffer *target
 
 	unsigned count = fd_ringbuffer_cmd_count(target);
 
-	debug_assert(__gpu_id(ring) < 500);
-
 	/* for debug after a lock up, write a unique counter value
 	 * to scratch6 for each IB, to make it easier to match up
 	 * register dumps to cmdstream.  The combination of IB and
@@ -425,18 +427,6 @@ emit_marker(struct fd_ringbuffer *ring, int scratch_idx)
 	OUT_RING(ring, ++marker_cnt);
 }
 
-/* helper to get numeric value from environment variable..  mostly
- * just leaving this here because it is helpful to brute-force figure
- * out unknown formats, etc, which blob driver does not support:
- */
-static inline uint32_t env2u(const char *envvar)
-{
-	char *str = getenv(envvar);
-	if (str)
-		return strtoul(str, NULL, 0);
-	return 0;
-}
-
 static inline uint32_t
 pack_rgba(enum pipe_format format, const float *rgba)
 {
@@ -478,14 +468,14 @@ fd_msaa_samples(unsigned samples)
  */
 
 static inline enum a4xx_state_block
-fd4_stage2shadersb(enum shader_t type)
+fd4_stage2shadersb(gl_shader_stage type)
 {
 	switch (type) {
-	case SHADER_VERTEX:
+	case MESA_SHADER_VERTEX:
 		return SB4_VS_SHADER;
-	case SHADER_FRAGMENT:
+	case MESA_SHADER_FRAGMENT:
 		return SB4_FS_SHADER;
-	case SHADER_COMPUTE:
+	case MESA_SHADER_COMPUTE:
 		return SB4_CS_SHADER;
 	default:
 		unreachable("bad shader type");

@@ -61,6 +61,12 @@ static void virgl_encoder_write_res(struct virgl_context *ctx,
    }
 }
 
+static void virgl_dirty_res(struct virgl_resource *res)
+{
+   if (res)
+      res->clean = FALSE;
+}
+
 int virgl_encode_bind_object(struct virgl_context *ctx,
                             uint32_t handle, uint32_t object)
 {
@@ -615,6 +621,7 @@ int virgl_encode_sampler_view(struct virgl_context *ctx,
    if (res->u.b.target == PIPE_BUFFER) {
       virgl_encoder_write_dword(ctx->cbuf, state->u.buf.offset / elem_size);
       virgl_encoder_write_dword(ctx->cbuf, (state->u.buf.offset + state->u.buf.size) / elem_size - 1);
+      virgl_dirty_res(res);
    } else {
       virgl_encoder_write_dword(ctx->cbuf, state->u.tex.first_layer | state->u.tex.last_layer << 16);
       virgl_encoder_write_dword(ctx->cbuf, state->u.tex.first_level | state->u.tex.last_level << 8);
@@ -949,6 +956,7 @@ int virgl_encode_set_shader_buffers(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_offset);
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_size);
          virgl_encoder_write_res(ctx, res);
+         virgl_dirty_res(res);
       } else {
          virgl_encoder_write_dword(ctx->cbuf, 0);
          virgl_encoder_write_dword(ctx->cbuf, 0);
@@ -972,6 +980,7 @@ int virgl_encode_set_hw_atomic_buffers(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_offset);
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_size);
          virgl_encoder_write_res(ctx, res);
+         virgl_dirty_res(res);
       } else {
          virgl_encoder_write_dword(ctx->cbuf, 0);
          virgl_encoder_write_dword(ctx->cbuf, 0);
@@ -999,6 +1008,7 @@ int virgl_encode_set_shader_images(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, images[i].u.buf.offset);
          virgl_encoder_write_dword(ctx->cbuf, images[i].u.buf.size);
          virgl_encoder_write_res(ctx, res);
+         virgl_dirty_res(res);
       } else {
          virgl_encoder_write_dword(ctx->cbuf, 0);
          virgl_encoder_write_dword(ctx->cbuf, 0);
@@ -1042,5 +1052,29 @@ int virgl_encode_texture_barrier(struct virgl_context *ctx,
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_TEXTURE_BARRIER, 0, 1));
    virgl_encoder_write_dword(ctx->cbuf, flags);
+   return 0;
+}
+
+int virgl_encode_host_debug_flagstring(struct virgl_context *ctx,
+                                       const char *flagstring)
+{
+   unsigned long slen = strlen(flagstring) + 1;
+   uint32_t sslen;
+   uint32_t string_length;
+
+   if (!slen)
+      return 0;
+
+   if (slen > 4 * 0xffff) {
+      debug_printf("VIRGL: host debug flag string too long, will be truncated\n");
+      slen = 4 * 0xffff;
+   }
+
+   sslen = (uint32_t )(slen + 3) / 4;
+   string_length = (uint32_t)MIN2(sslen * 4, slen);
+
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_DEBUG_FLAGS, 0, sslen));
+   virgl_encoder_write_block(ctx->cbuf, (const uint8_t *)flagstring, string_length);
+
    return 0;
 }

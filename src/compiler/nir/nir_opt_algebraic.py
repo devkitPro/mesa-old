@@ -105,6 +105,11 @@ optimizations = [
    (('imul', a, 1), a),
    (('fmul', a, -1.0), ('fneg', a)),
    (('imul', a, -1), ('ineg', a)),
+   # If a < 0: fsign(a)*a*a => -1*a*a => -a*a => abs(a)*a
+   # If a > 0: fsign(a)*a*a => 1*a*a => a*a => abs(a)*a
+   # If a == 0: fsign(a)*a*a => 0*0*0 => abs(0)*0
+   (('fmul', ('fsign', a), ('fmul', a, a)), ('fmul', ('fabs', a), a)),
+   (('fmul', ('fmul', ('fsign', a), a), a), ('fmul', ('fabs', a), a)),
    (('~ffma', 0.0, a, b), b),
    (('~ffma', a, 0.0, b), b),
    (('~ffma', a, b, 0.0), ('fmul', a, b)),
@@ -118,7 +123,9 @@ optimizations = [
    (('~flrp', a, 0.0, c), ('fadd', ('fmul', ('fneg', a), c), a)),
    (('flrp@32', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp32'),
    (('flrp@64', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp64'),
+   (('ffloor', a), ('fsub', a, ('ffract', a)), 'options->lower_ffloor'),
    (('ffract', a), ('fsub', a, ('ffloor', a)), 'options->lower_ffract'),
+   (('fceil', a), ('fneg', ('ffloor', ('fneg', a))), 'options->lower_fceil'),
    (('~fadd', ('fmul', a, ('fadd', 1.0, ('fneg', ('b2f', c)))), ('fmul', b, ('b2f', c))), ('bcsel', c, b, a), 'options->lower_flrp32'),
    (('~fadd@32', ('fmul', a, ('fadd', 1.0, ('fneg',         c ))), ('fmul', b,         c )), ('flrp', a, b, c), '!options->lower_flrp32'),
    (('~fadd@64', ('fmul', a, ('fadd', 1.0, ('fneg',         c ))), ('fmul', b,         c )), ('flrp', a, b, c), '!options->lower_flrp64'),
@@ -324,6 +331,7 @@ optimizations = [
    (('imax', a, ('ineg', a)), ('iabs', a)),
    (('~fmin', ('fmax', a, 0.0), 1.0), ('fsat', a), '!options->lower_fsat'),
    (('~fmax', ('fmin', a, 1.0), 0.0), ('fsat', a), '!options->lower_fsat'),
+   (('fsat', ('fsign', a)), ('b2f', ('flt', 0.0, a))),
    (('fsat', a), ('fmin', ('fmax', a, 0.0), 1.0), 'options->lower_fsat'),
    (('fsat', ('fsat', a)), ('fsat', a)),
    (('fmin', ('fmax', ('fmin', ('fmax', a, b), c), b), c), ('fmin', ('fmax', a, b), c)),
@@ -367,7 +375,7 @@ optimizations = [
    (('iand', ('uge(is_used_once)', a, c), ('uge', b, c)), ('uge', ('umin', a, b), c)),
 
    (('ior', 'a@bool', ('ieq', a, False)), True),
-   (('ior', 'a@bool', ('inot', a)), True),
+   (('ior', a, ('inot', a)), -1),
 
    (('iand', ('ieq', 'a@32', 0), ('ieq', 'b@32', 0)), ('ieq', ('ior', 'a@32', 'b@32'), 0)),
 
@@ -744,6 +752,23 @@ for left, right in itertools.combinations_with_replacement(invert.keys(), 2):
                          ('iand', (invert[left], a, b), (invert[right], c, d))))
    optimizations.append((('inot', ('iand(is_used_once)', (left, a, b), (right, c, d))),
                          ('ior', (invert[left], a, b), (invert[right], c, d))))
+
+# Optimize x2yN(b2x(x)) -> b2y
+optimizations.append((('f2b', ('b2f', a)), a))
+optimizations.append((('i2b', ('b2i', a)), a))
+for x, y in itertools.product(['f', 'u', 'i'], ['f', 'u', 'i']):
+   if x != 'f' and y != 'f' and x != y:
+      continue
+
+   b2x = 'b2f' if x == 'f' else 'b2i'
+   b2y = 'b2f' if y == 'f' else 'b2i'
+
+   for N in [8, 16, 32, 64]:
+      if y == 'f' and N == 8:
+         continue
+
+      x2yN = '{}2{}{}'.format(x, y, N)
+      optimizations.append(((x2yN, (b2x, a)), (b2y, a)))
 
 def fexp2i(exp, bits):
    # We assume that exp is already in the right range.

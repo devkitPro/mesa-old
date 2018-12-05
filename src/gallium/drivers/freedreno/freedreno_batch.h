@@ -84,6 +84,10 @@ struct fd_batch {
 	 * The 'cleared' bits will be set for buffers which are *entirely*
 	 * cleared, and 'partial_cleared' bits will be set if you must
 	 * check cleared_scissor.
+	 *
+	 * The 'invalidated' bits are set for cleared buffers, and buffers
+	 * where the contents are undefined, ie. what we don't need to restore
+	 * to gmem.
 	 */
 	enum {
 		/* align bitmask values w/ PIPE_CLEAR_*.. since that is convenient.. */
@@ -91,7 +95,7 @@ struct fd_batch {
 		FD_BUFFER_DEPTH   = PIPE_CLEAR_DEPTH,
 		FD_BUFFER_STENCIL = PIPE_CLEAR_STENCIL,
 		FD_BUFFER_ALL     = FD_BUFFER_COLOR | FD_BUFFER_DEPTH | FD_BUFFER_STENCIL,
-	} cleared, partial_cleared, restore, resolve;
+	} invalidated, cleared, fast_cleared, restore, resolve;
 
 	/* is this a non-draw batch (ie compute/blit which has no pfb state)? */
 	bool nondraw : 1;
@@ -120,6 +124,7 @@ struct fd_batch {
 		FD_GMEM_LOGICOP_ENABLED      = 0x20,
 	} gmem_reason;
 	unsigned num_draws;   /* number of draws in current batch */
+	unsigned num_vertices;   /* number of vertices in current batch */
 
 	/* Track the maximal bounds of the scissor of all the draws within a
 	 * batch.  Used at the tile rendering step (fd_gmem_render_tiles(),
@@ -127,23 +132,10 @@ struct fd_batch {
 	 */
 	struct pipe_scissor_state max_scissor;
 
-	/* Track the cleared scissor for color/depth/stencil, so we know
-	 * which, if any, tiles need to be restored (mem2gmem).  Only valid
-	 * if the corresponding bit in ctx->cleared is set.
-	 */
-	struct {
-		struct pipe_scissor_state color, depth, stencil;
-	} cleared_scissor;
-
 	/* Keep track of DRAW initiators that need to be patched up depending
 	 * on whether we using binning or not:
 	 */
 	struct util_dynarray draw_patches;
-
-	/* Keep track of blitter GMEM offsets that need to be patched up once we
-	 * know the gmem layout:
-	 */
-	struct util_dynarray gmem_patches;
 
 	/* Keep track of writes to RB_RENDER_CONTROL which need to be patched
 	 * once we know whether or not to use GMEM, and GMEM tile pitch.
@@ -155,6 +147,8 @@ struct fd_batch {
 
 	struct pipe_framebuffer_state framebuffer;
 
+	struct fd_submit *submit;
+
 	/** draw pass cmdstream: */
 	struct fd_ringbuffer *draw;
 	/** binning pass cmdstream: */
@@ -164,6 +158,12 @@ struct fd_batch {
 
 	// TODO maybe more generically split out clear and clear_binning rings?
 	struct fd_ringbuffer *lrz_clear;
+	struct fd_ringbuffer *tile_setup;
+	struct fd_ringbuffer *tile_fini;
+
+	union pipe_color_union clear_color[MAX_RENDER_TARGETS];
+	double clear_depth;
+	unsigned clear_stencil;
 
 	/**
 	 * hw query related state:

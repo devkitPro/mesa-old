@@ -97,7 +97,7 @@ handle_mem_write(void *user_data, uint64_t phys_addr,
 }
 
 static void
-handle_ring_write(void *user_data, enum gen_engine engine,
+handle_ring_write(void *user_data, enum drm_i915_gem_engine_class engine,
                   const void *ring_data, uint32_t ring_data_len)
 {
    struct aub_file *file = (struct aub_file *) user_data;
@@ -695,7 +695,7 @@ update_batch_window(struct batch_window *window, bool reset, int exec_idx)
 }
 
 static void
-display_batch_ring_write(void *user_data, enum gen_engine engine,
+display_batch_ring_write(void *user_data, enum drm_i915_gem_engine_class engine,
                          const void *data, uint32_t data_len)
 {
    struct batch_window *window = (struct batch_window *) user_data;
@@ -706,7 +706,8 @@ display_batch_ring_write(void *user_data, enum gen_engine engine,
 }
 
 static void
-display_batch_execlist_write(void *user_data, enum gen_engine engine,
+display_batch_execlist_write(void *user_data,
+                             enum drm_i915_gem_engine_class engine,
                              uint64_t context_descriptor)
 {
    struct batch_window *window = (struct batch_window *) user_data;
@@ -722,19 +723,21 @@ display_batch_execlist_write(void *user_data, enum gen_engine engine,
    uint32_t ring_buffer_head = context_img[5];
    uint32_t ring_buffer_tail = context_img[7];
    uint32_t ring_buffer_start = context_img[9];
+   uint32_t ring_buffer_length = (context_img[11] & 0x1ff000) + 4096;
 
    window->mem.pml4 = (uint64_t)context_img[49] << 32 | context_img[51];
 
    struct gen_batch_decode_bo ring_bo =
       aub_mem_get_ggtt_bo(&window->mem, ring_buffer_start);
    assert(ring_bo.size > 0);
-   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr);
+   void *commands = (uint8_t *)ring_bo.map + (ring_buffer_start - ring_bo.addr) + ring_buffer_head;
 
    window->uses_ppgtt = true;
 
+   window->decode_ctx.engine = engine;
    aub_viewer_render_batch(&window->decode_ctx, commands,
-                           ring_buffer_tail - ring_buffer_head,
-                           ring_buffer_start);
+                           MIN2(ring_buffer_tail - ring_buffer_head, ring_buffer_length),
+                           ring_buffer_start + ring_buffer_head);
 }
 
 static void
@@ -839,7 +842,6 @@ display_registers_window(struct window *win)
    filter.Draw();
 
    ImGui::BeginChild(ImGui::GetID("##block"));
-   struct hash_entry *entry;
    hash_table_foreach(context.file->spec->registers_by_name, entry) {
       struct gen_group *reg = (struct gen_group *) entry->data;
       if (filter.PassFilter(reg->name) &&
@@ -895,7 +897,6 @@ display_commands_window(struct window *win)
    if (ImGui::Button("Dwords")) show_dwords ^= 1;
 
    ImGui::BeginChild(ImGui::GetID("##block"));
-   struct hash_entry *entry;
    hash_table_foreach(context.file->spec->commands, entry) {
       struct gen_group *cmd = (struct gen_group *) entry->data;
       if ((cmd_filter.PassFilter(cmd->name) &&

@@ -1127,13 +1127,22 @@ drm_handle_device(void *data, struct wl_drm *drm, const char *device)
    if (dri2_dpy->fd == -1) {
       _eglLog(_EGL_WARNING, "wayland-egl: could not open %s (%s)",
               dri2_dpy->device_name, strerror(errno));
+      free(dri2_dpy->device_name);
+      dri2_dpy->device_name = NULL;
       return;
    }
 
    if (drmGetNodeTypeFromFd(dri2_dpy->fd) == DRM_NODE_RENDER) {
       dri2_dpy->authenticated = true;
    } else {
-      drmGetMagic(dri2_dpy->fd, &magic);
+      if (drmGetMagic(dri2_dpy->fd, &magic)) {
+         close(dri2_dpy->fd);
+         dri2_dpy->fd = -1;
+         free(dri2_dpy->device_name);
+         dri2_dpy->device_name = NULL;
+         _eglLog(_EGL_WARNING, "wayland-egl: drmGetMagic failed");
+         return;
+      }
       wl_drm_authenticate(dri2_dpy->wl_drm, magic);
    }
 }
@@ -1320,9 +1329,8 @@ dri2_wl_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
 static EGLBoolean
 dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
 {
+   _EGLDevice *dev;
    struct dri2_egl_display *dri2_dpy;
-
-   loader_set_logger(_eglLog);
 
    dri2_dpy = calloc(1, sizeof *dri2_dpy);
    if (!dri2_dpy)
@@ -1374,6 +1382,14 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
 
    dri2_dpy->fd = loader_get_user_preferred_fd(dri2_dpy->fd,
                                                &dri2_dpy->is_different_gpu);
+   dev = _eglAddDevice(dri2_dpy->fd, false);
+   if (!dev) {
+      _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to find EGLDevice");
+      goto cleanup;
+   }
+
+   disp->Device = dev;
+
    if (dri2_dpy->is_different_gpu) {
       free(dri2_dpy->device_name);
       dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd);
@@ -1652,8 +1668,8 @@ swrast_update_buffers(struct dri2_egl_surface *dri2_surf)
    if (dri2_surf->back)
       return 0;
 
-   if (dri2_surf->base.Width != dri2_surf->wl_win->attached_width ||
-       dri2_surf->base.Height != dri2_surf->wl_win->attached_height) {
+   if (dri2_surf->base.Width != dri2_surf->wl_win->width ||
+       dri2_surf->base.Height != dri2_surf->wl_win->height) {
 
       dri2_wl_release_buffers(dri2_surf);
 
@@ -1974,9 +1990,8 @@ static const __DRIextension *swrast_loader_extensions[] = {
 static EGLBoolean
 dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
 {
+   _EGLDevice *dev;
    struct dri2_egl_display *dri2_dpy;
-
-   loader_set_logger(_eglLog);
 
    dri2_dpy = calloc(1, sizeof *dri2_dpy);
    if (!dri2_dpy)
@@ -1992,6 +2007,14 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
    } else {
       dri2_dpy->wl_dpy = disp->PlatformDisplay;
    }
+
+   dev = _eglAddDevice(dri2_dpy->fd, true);
+   if (!dev) {
+      _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to find EGLDevice");
+      goto cleanup;
+   }
+
+   disp->Device = dev;
 
    dri2_dpy->wl_queue = wl_display_create_queue(dri2_dpy->wl_dpy);
 

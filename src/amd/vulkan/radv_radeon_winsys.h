@@ -223,6 +223,8 @@ struct radeon_winsys {
 
 	void (*buffer_set_metadata)(struct radeon_winsys_bo *bo,
 				    struct radeon_bo_metadata *md);
+	void (*buffer_get_metadata)(struct radeon_winsys_bo *bo,
+				    struct radeon_bo_metadata *md);
 
 	void (*buffer_virtual_bind)(struct radeon_winsys_bo *parent,
 	                            uint64_t offset, uint64_t size,
@@ -266,9 +268,6 @@ struct radeon_winsys {
 
 	int (*surface_init)(struct radeon_winsys *ws,
 			    const struct ac_surf_info *surf_info,
-			    struct radeon_surf *surf);
-
-	int (*surface_best)(struct radeon_winsys *ws,
 			    struct radeon_surf *surf);
 
 	struct radeon_winsys_fence *(*create_fence)();

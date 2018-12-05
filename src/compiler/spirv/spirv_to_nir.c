@@ -495,15 +495,19 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
 
    case SpvOpDecorate:
    case SpvOpMemberDecorate:
+   case SpvOpDecorateStringGOOGLE:
+   case SpvOpMemberDecorateStringGOOGLE:
    case SpvOpExecutionMode: {
       struct vtn_value *val = vtn_untyped_value(b, target);
 
       struct vtn_decoration *dec = rzalloc(b, struct vtn_decoration);
       switch (opcode) {
       case SpvOpDecorate:
+      case SpvOpDecorateStringGOOGLE:
          dec->scope = VTN_DEC_DECORATION;
          break;
       case SpvOpMemberDecorate:
+      case SpvOpMemberDecorateStringGOOGLE:
          dec->scope = VTN_DEC_STRUCT_MEMBER0 + *(w++);
          vtn_fail_if(dec->scope < VTN_DEC_STRUCT_MEMBER0, /* overflow */
                      "Member argument of OpMemberDecorate too large");
@@ -669,6 +673,16 @@ mutable_matrix_member(struct vtn_builder *b, struct vtn_type *type, int member)
 }
 
 static void
+vtn_handle_access_qualifier(struct vtn_builder *b, struct vtn_type *type,
+                            int member, enum gl_access_qualifier access)
+{
+   type->members[member] = vtn_type_copy(b, type->members[member]);
+   type = type->members[member];
+
+   type->access |= access;
+}
+
+static void
 struct_member_decoration_cb(struct vtn_builder *b,
                             struct vtn_value *val, int member,
                             const struct vtn_decoration *dec, void *void_ctx)
@@ -681,13 +695,21 @@ struct_member_decoration_cb(struct vtn_builder *b,
    assert(member < ctx->num_fields);
 
    switch (dec->decoration) {
-   case SpvDecorationNonWritable:
-   case SpvDecorationNonReadable:
    case SpvDecorationRelaxedPrecision:
-   case SpvDecorationVolatile:
-   case SpvDecorationCoherent:
    case SpvDecorationUniform:
       break; /* FIXME: Do nothing with this for now. */
+   case SpvDecorationNonWritable:
+      vtn_handle_access_qualifier(b, ctx->type, member, ACCESS_NON_WRITEABLE);
+      break;
+   case SpvDecorationNonReadable:
+      vtn_handle_access_qualifier(b, ctx->type, member, ACCESS_NON_READABLE);
+      break;
+   case SpvDecorationVolatile:
+      vtn_handle_access_qualifier(b, ctx->type, member, ACCESS_VOLATILE);
+      break;
+   case SpvDecorationCoherent:
+      vtn_handle_access_qualifier(b, ctx->type, member, ACCESS_COHERENT);
+      break;
    case SpvDecorationNoPerspective:
       ctx->fields[member].interpolation = INTERP_MODE_NOPERSPECTIVE;
       break;
@@ -763,6 +785,10 @@ struct_member_decoration_cb(struct vtn_builder *b,
    case SpvDecorationAlignment:
       vtn_warn("Decoration only allowed for CL-style kernels: %s",
                spirv_decoration_to_string(dec->decoration));
+      break;
+
+   case SpvDecorationHlslSemanticGOOGLE:
+      /* HLSL semantic decorations can safely be ignored by the driver. */
       break;
 
    default:
@@ -852,6 +878,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationOffset:
    case SpvDecorationXfbBuffer:
    case SpvDecorationXfbStride:
+   case SpvDecorationHlslSemanticGOOGLE:
       vtn_warn("Decoration only allowed for struct members: %s",
                spirv_decoration_to_string(dec->decoration));
       break;
@@ -1197,17 +1224,18 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
          val->type->type = glsl_uint_type();
       }
 
-      if (storage_class == SpvStorageClassWorkgroup &&
-          b->options->lower_workgroup_access_to_offsets) {
-         uint32_t size, align;
-         val->type->deref = vtn_type_layout_std430(b, val->type->deref,
-                                                   &size, &align);
-         val->type->length = size;
-         val->type->align = align;
+      if (storage_class == SpvStorageClassWorkgroup) {
          /* These can actually be stored to nir_variables and used as SSA
           * values so they need a real glsl_type.
           */
          val->type->type = glsl_uint_type();
+         if (b->options->lower_workgroup_access_to_offsets) {
+            uint32_t size, align;
+            val->type->deref = vtn_type_layout_std430(b, val->type->deref,
+                                                      &size, &align);
+            val->type->length = size;
+            val->type->align = align;
+         }
       }
       break;
    }
@@ -1771,11 +1799,37 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          nir_const_value src[4];
 
          for (unsigned i = 0; i < count - 4; i++) {
-            nir_constant *c =
-               vtn_value(b, w[4 + i], vtn_value_type_constant)->constant;
+            struct vtn_value *src_val =
+               vtn_value(b, w[4 + i], vtn_value_type_constant);
+
+            /* If this is an unsized source, pull the bit size from the
+             * source; otherwise, we'll use the bit size from the destination.
+             */
+            if (!nir_alu_type_get_type_size(nir_op_infos[op].input_types[i]))
+               bit_size = glsl_get_bit_size(src_val->type->type);
 
             unsigned j = swap ? 1 - i : i;
-            src[j] = c->values[0];
+            src[j] = src_val->constant->values[0];
+         }
+
+         /* fix up fixed size sources */
+         switch (op) {
+         case nir_op_ishl:
+         case nir_op_ishr:
+         case nir_op_ushr: {
+            if (bit_size == 32)
+               break;
+            for (unsigned i = 0; i < num_components; ++i) {
+               switch (bit_size) {
+               case 64: src[1].u32[i] = src[1].u64[i]; break;
+               case 16: src[1].u32[i] = src[1].u16[i]; break;
+               case  8: src[1].u32[i] = src[1].u8[i];  break;
+               }
+            }
+            break;
+         }
+         default:
+            break;
          }
 
          val->constant->values[0] =
@@ -1800,69 +1854,6 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
 
    /* Now that we have the value, update the workgroup size if needed */
    vtn_foreach_decoration(b, val, handle_workgroup_size_decoration_cb, NULL);
-}
-
-static void
-vtn_handle_function_call(struct vtn_builder *b, SpvOp opcode,
-                         const uint32_t *w, unsigned count)
-{
-   struct vtn_type *res_type = vtn_value(b, w[1], vtn_value_type_type)->type;
-   struct vtn_function *vtn_callee =
-      vtn_value(b, w[3], vtn_value_type_function)->func;
-   struct nir_function *callee = vtn_callee->impl->function;
-
-   vtn_callee->referenced = true;
-
-   nir_call_instr *call = nir_call_instr_create(b->nb.shader, callee);
-
-   unsigned param_idx = 0;
-
-   nir_deref_instr *ret_deref = NULL;
-   struct vtn_type *ret_type = vtn_callee->type->return_type;
-   if (ret_type->base_type != vtn_base_type_void) {
-      nir_variable *ret_tmp =
-         nir_local_variable_create(b->nb.impl, ret_type->type, "return_tmp");
-      ret_deref = nir_build_deref_var(&b->nb, ret_tmp);
-      call->params[param_idx++] = nir_src_for_ssa(&ret_deref->dest.ssa);
-   }
-
-   for (unsigned i = 0; i < vtn_callee->type->length; i++) {
-      struct vtn_type *arg_type = vtn_callee->type->params[i];
-      unsigned arg_id = w[4 + i];
-
-      if (arg_type->base_type == vtn_base_type_sampled_image) {
-         struct vtn_sampled_image *sampled_image =
-            vtn_value(b, arg_id, vtn_value_type_sampled_image)->sampled_image;
-
-         call->params[param_idx++] =
-            nir_src_for_ssa(&sampled_image->image->deref->dest.ssa);
-         call->params[param_idx++] =
-            nir_src_for_ssa(&sampled_image->sampler->deref->dest.ssa);
-      } else if (arg_type->base_type == vtn_base_type_pointer ||
-                 arg_type->base_type == vtn_base_type_image ||
-                 arg_type->base_type == vtn_base_type_sampler) {
-         struct vtn_pointer *pointer =
-            vtn_value(b, arg_id, vtn_value_type_pointer)->pointer;
-         call->params[param_idx++] =
-            nir_src_for_ssa(vtn_pointer_to_ssa(b, pointer));
-      } else {
-         /* This is a regular SSA value and we need a temporary */
-         nir_variable *tmp =
-            nir_local_variable_create(b->nb.impl, arg_type->type, "arg_tmp");
-         nir_deref_instr *tmp_deref = nir_build_deref_var(&b->nb, tmp);
-         vtn_local_store(b, vtn_ssa_value(b, arg_id), tmp_deref);
-         call->params[param_idx++] = nir_src_for_ssa(&tmp_deref->dest.ssa);
-      }
-   }
-   assert(param_idx == call->num_params);
-
-   nir_builder_instr_insert(&b->nb, &call->instr);
-
-   if (ret_type->base_type == vtn_base_type_void) {
-      vtn_push_value(b, w[2], vtn_value_type_undef);
-   } else {
-      vtn_push_ssa(b, w[2], res_type, vtn_local_load(b, ret_deref));
-   }
 }
 
 struct vtn_ssa_value *
@@ -2772,6 +2763,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
       switch (opcode) {
       case SpvOpAtomicLoad:
          atomic->num_components = glsl_get_vector_elements(ptr->type->type);
+         nir_intrinsic_set_align(atomic, 4, 0);
          if (ptr->mode == vtn_variable_mode_ssbo)
             atomic->src[src++] = nir_src_for_ssa(index);
          atomic->src[src++] = nir_src_for_ssa(offset);
@@ -2780,6 +2772,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
       case SpvOpAtomicStore:
          atomic->num_components = glsl_get_vector_elements(ptr->type->type);
          nir_intrinsic_set_write_mask(atomic, (1 << atomic->num_components) - 1);
+         nir_intrinsic_set_align(atomic, 4, 0);
          atomic->src[src++] = nir_src_for_ssa(vtn_ssa_value(b, w[4])->def);
          if (ptr->mode == vtn_variable_mode_ssbo)
             atomic->src[src++] = nir_src_for_ssa(index);
@@ -3603,6 +3596,8 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpMemberDecorate:
    case SpvOpGroupDecorate:
    case SpvOpGroupMemberDecorate:
+   case SpvOpDecorateStringGOOGLE:
+   case SpvOpMemberDecorateStringGOOGLE:
       vtn_handle_decoration(b, opcode, w, count);
       break;
 
@@ -3781,6 +3776,8 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpMemberDecorate:
    case SpvOpGroupDecorate:
    case SpvOpGroupMemberDecorate:
+   case SpvOpDecorateStringGOOGLE:
+   case SpvOpMemberDecorateStringGOOGLE:
       vtn_fail("Invalid opcode types and variables section");
       break;
 

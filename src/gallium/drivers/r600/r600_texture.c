@@ -1108,7 +1108,9 @@ static struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen
 	      templ->depth0 != 1 || templ->last_level != 0)
 		return NULL;
 
-	buf = rscreen->ws->buffer_from_handle(rscreen->ws, whandle, &stride, &offset);
+	buf = rscreen->ws->buffer_from_handle(rscreen->ws, whandle,
+					      rscreen->info.max_alignment,
+					      &stride, &offset);
 	if (!buf)
 		return NULL;
 
@@ -1852,6 +1854,7 @@ r600_memobj_from_handle(struct pipe_screen *screen,
 		return NULL;
 
 	buf = rscreen->ws->buffer_from_handle(rscreen->ws, whandle,
+					      rscreen->info.max_alignment,
 					      &stride, &offset);
 	if (!buf) {
 		free(memobj);
@@ -1942,7 +1945,7 @@ r600_texture_from_memobj(struct pipe_screen *screen,
 	pb_reference(&buf, memobj->buf);
 
 	rtex->resource.b.is_shared = true;
-	rtex->resource.external_usage = PIPE_HANDLE_USAGE_READ_WRITE;
+	rtex->resource.external_usage = PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE;
 
 	if (rscreen->apply_opaque_metadata)
 		rscreen->apply_opaque_metadata(rscreen, rtex, &metadata);

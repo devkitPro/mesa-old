@@ -1798,8 +1798,8 @@ static bool
 texture_format_error_check_gles(struct gl_context *ctx, GLenum format,
                                 GLenum type, GLenum internalFormat, const char *callerName)
 {
-   GLenum err = _mesa_es3_error_check_format_and_type(ctx, format, type,
-                                                      internalFormat);
+   GLenum err = _mesa_gles_error_check_format_and_type(ctx, format, type,
+                                                       internalFormat);
    if (err != GL_NO_ERROR) {
       _mesa_error(ctx, err,
                   "%s(format = %s, type = %s, internalformat = %s)",
@@ -2407,8 +2407,8 @@ copytexture_error_check( struct gl_context *ctx, GLuint dimensions,
 
    if (_mesa_is_gles(ctx)) {
       bool valid = true;
-      if (_mesa_base_format_component_count(baseFormat) >
-          _mesa_base_format_component_count(rb_base_format)) {
+      if (_mesa_components_in_format(baseFormat) >
+          _mesa_components_in_format(rb_base_format)) {
          valid = false;
       }
       if (baseFormat == GL_DEPTH_COMPONENT ||

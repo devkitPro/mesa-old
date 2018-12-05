@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2014 Rob Clark <robclark@freedesktop.org>
  *
@@ -50,7 +48,7 @@
  * sizedwords:     size of const value buffer
  */
 static void
-fd4_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
+fd4_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		uint32_t regid, uint32_t offset, uint32_t sizedwords,
 		const uint32_t *dwords, struct pipe_resource *prsc)
 {
@@ -88,7 +86,7 @@ fd4_emit_const(struct fd_ringbuffer *ring, enum shader_t type,
 }
 
 static void
-fd4_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
+fd4_emit_const_bo(struct fd_ringbuffer *ring, gl_shader_stage type, boolean write,
 		uint32_t regid, uint32_t num, struct pipe_resource **prscs, uint32_t *offsets)
 {
 	uint32_t anum = align(num, 4);
@@ -512,7 +510,7 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	emit_marker(ring, 5);
 
-	if ((dirty & FD_DIRTY_FRAMEBUFFER) && !emit->key.binning_pass) {
+	if ((dirty & FD_DIRTY_FRAMEBUFFER) && !emit->binning_pass) {
 		struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
 		unsigned char mrt_comp[A4XX_MAX_RENDER_TARGETS] = {0};
 
@@ -626,7 +624,8 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, rast->pc_prim_vtx_cntl2);
 	}
 
-	if (dirty & FD_DIRTY_SCISSOR) {
+	/* NOTE: scissor enabled bit is part of rasterizer state: */
+	if (dirty & (FD_DIRTY_SCISSOR | FD_DIRTY_RASTERIZER)) {
 		struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
 
 		OUT_PKT0(ring, REG_A4XX_GRAS_SC_WINDOW_SCISSOR_BR, 2);
@@ -687,7 +686,7 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	if (emit->prog == &ctx->prog) { /* evil hack to deal sanely with clear path */
 		ir3_emit_vs_consts(vp, ring, ctx, emit->info);
-		if (!emit->key.binning_pass)
+		if (!emit->binning_pass)
 			ir3_emit_fs_consts(fp, ring, ctx);
 	}
 

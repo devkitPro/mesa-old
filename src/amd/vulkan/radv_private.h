@@ -99,6 +99,9 @@ typedef uint32_t xcb_window_t;
 #define NUM_META_FS_KEYS 12
 #define RADV_MAX_DRM_DEVICES 8
 #define MAX_VIEWS        8
+#define MAX_SO_STREAMS 4
+#define MAX_SO_BUFFERS 4
+#define MAX_SO_OUTPUTS 64
 
 #define NUM_DEPTH_CLEAR_PIPELINES 3
 
@@ -107,6 +110,8 @@ typedef uint32_t xcb_window_t;
  * for certain buffer operations.
  */
 #define RADV_BUFFER_OPS_CS_THRESHOLD 4096
+
+#define RADV_BUFFER_UPDATE_THRESHOLD 1024
 
 enum radv_mem_heap {
 	RADV_MEM_HEAP_VRAM,
@@ -310,6 +315,8 @@ struct radv_physical_device {
 	VkPhysicalDeviceMemoryProperties memory_properties;
 	enum radv_mem_type mem_type_indices[RADV_MEM_TYPE_COUNT];
 
+	drmPciBusInfo bus_info;
+
 	struct radv_device_extension_table supported_extensions;
 };
 
@@ -450,6 +457,12 @@ struct radv_meta_state {
 
 	VkPipelineLayout                          clear_color_p_layout;
 	VkPipelineLayout                          clear_depth_p_layout;
+
+	/* Optimized compute fast HTILE clear for stencil or depth only. */
+	VkPipeline clear_htile_mask_pipeline;
+	VkPipelineLayout clear_htile_mask_p_layout;
+	VkDescriptorSetLayout clear_htile_mask_ds_layout;
+
 	struct {
 		VkRenderPass render_pass[NUM_META_FS_KEYS][RADV_META_DST_LAYOUT_COUNT];
 
@@ -505,14 +518,29 @@ struct radv_meta_state {
 		VkPipelineLayout                          img_p_layout;
 		VkDescriptorSetLayout                     img_ds_layout;
 		VkPipeline pipeline;
+	} btoi_r32g32b32;
+	struct {
+		VkPipelineLayout                          img_p_layout;
+		VkDescriptorSetLayout                     img_ds_layout;
+		VkPipeline pipeline;
 		VkPipeline pipeline_3d;
 	} itoi;
 	struct {
 		VkPipelineLayout                          img_p_layout;
 		VkDescriptorSetLayout                     img_ds_layout;
 		VkPipeline pipeline;
+	} itoi_r32g32b32;
+	struct {
+		VkPipelineLayout                          img_p_layout;
+		VkDescriptorSetLayout                     img_ds_layout;
+		VkPipeline pipeline;
 		VkPipeline pipeline_3d;
 	} cleari;
+	struct {
+		VkPipelineLayout                          img_p_layout;
+		VkDescriptorSetLayout                     img_ds_layout;
+		VkPipeline pipeline;
+	} cleari_r32g32b32;
 
 	struct {
 		VkPipelineLayout                          p_layout;
@@ -573,6 +601,7 @@ struct radv_meta_state {
 		VkPipelineLayout p_layout;
 		VkPipeline occlusion_query_pipeline;
 		VkPipeline pipeline_statistics_query_pipeline;
+		VkPipeline tfb_query_pipeline;
 	} query;
 };
 
@@ -821,6 +850,7 @@ enum radv_cmd_dirty_bits {
 	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 11,
 	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 12,
 	RADV_CMD_DIRTY_VERTEX_BUFFER                     = 1 << 13,
+	RADV_CMD_DIRTY_STREAMOUT_BUFFER                  = 1 << 14,
 };
 
 enum radv_cmd_flush_bits {
@@ -846,6 +876,7 @@ enum radv_cmd_flush_bits {
 	/* Pipeline query controls. */
 	RADV_CMD_FLAG_START_PIPELINE_STATS = 1 << 13,
 	RADV_CMD_FLAG_STOP_PIPELINE_STATS  = 1 << 14,
+	RADV_CMD_FLAG_VGT_STREAMOUT_SYNC   = 1 << 15,
 
 	RADV_CMD_FLUSH_AND_INV_FRAMEBUFFER = (RADV_CMD_FLAG_FLUSH_AND_INV_CB |
 					      RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
@@ -856,6 +887,29 @@ enum radv_cmd_flush_bits {
 struct radv_vertex_binding {
 	struct radv_buffer *                          buffer;
 	VkDeviceSize                                 offset;
+};
+
+struct radv_streamout_binding {
+	struct radv_buffer *buffer;
+	VkDeviceSize offset;
+	VkDeviceSize size;
+};
+
+struct radv_streamout_state {
+	/* Mask of bound streamout buffers. */
+	uint8_t enabled_mask;
+
+	/* External state that comes from the last vertex stage, it must be
+	 * set explicitely when binding a new graphics pipeline.
+	 */
+	uint16_t stride_in_dw[MAX_SO_BUFFERS];
+	uint32_t enabled_stream_buffers_mask; /* stream0 buffers0-3 in 4 LSB */
+
+	/* State of VGT_STRMOUT_BUFFER_(CONFIG|END) */
+	uint32_t hw_enabled_mask;
+
+	/* State of VGT_STRMOUT_(CONFIG|EN) */
+	bool streamout_enabled;
 };
 
 struct radv_viewport_state {
@@ -965,6 +1019,7 @@ struct radv_cmd_state {
 	const struct radv_subpass *                         subpass;
 	struct radv_dynamic_state                     dynamic;
 	struct radv_attachment_state *                attachments;
+	struct radv_streamout_state                  streamout;
 	VkRect2D                                     render_area;
 
 	/* Index buffer */
@@ -1034,6 +1089,7 @@ struct radv_cmd_buffer {
 	struct radeon_cmdbuf *cs;
 	struct radv_cmd_state state;
 	struct radv_vertex_binding                   vertex_bindings[MAX_VBS];
+	struct radv_streamout_binding                streamout_bindings[MAX_SO_BUFFERS];
 	uint32_t queue_family_index;
 
 	uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
@@ -1093,9 +1149,8 @@ void si_cs_emit_write_event_eop(struct radeon_cmdbuf *cs,
 				uint32_t new_fence,
 				uint64_t gfx9_eop_bug_va);
 
-void si_emit_wait_fence(struct radeon_cmdbuf *cs,
-			uint64_t va, uint32_t ref,
-			uint32_t mask);
+void radv_cp_wait_mem(struct radeon_cmdbuf *cs, uint32_t op, uint64_t va,
+		      uint32_t ref, uint32_t mask);
 void si_cs_emit_cache_flush(struct radeon_cmdbuf *cs,
 			    enum chip_class chip_class,
 			    uint32_t *fence_ptr, uint64_t va,
@@ -1148,9 +1203,9 @@ void radv_update_color_clear_metadata(struct radv_cmd_buffer *cmd_buffer,
 				      int cb_idx,
 				      uint32_t color_values[2]);
 
-void radv_set_dcc_need_cmask_elim_pred(struct radv_cmd_buffer *cmd_buffer,
-				       struct radv_image *image,
-				       bool value);
+void radv_update_fce_metadata(struct radv_cmd_buffer *cmd_buffer,
+			      struct radv_image *image, bool value);
+
 uint32_t radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer,
 			  struct radeon_winsys_bo *bo,
 			  uint64_t offset, uint64_t size, uint32_t value);
@@ -1331,6 +1386,9 @@ struct radv_pipeline {
 
 	unsigned max_waves;
 	unsigned scratch_bytes_per_wave;
+
+	/* Not NULL if graphics pipeline uses streamout. */
+	struct radv_shader_variant *streamout_shader;
 };
 
 static inline bool radv_pipeline_has_gs(const struct radv_pipeline *pipeline)
@@ -1443,7 +1501,15 @@ struct radv_image {
 	struct radv_fmask_info fmask;
 	struct radv_cmask_info cmask;
 	uint64_t clear_value_offset;
-	uint64_t dcc_pred_offset;
+	uint64_t fce_pred_offset;
+
+	/*
+	 * Metadata for the TC-compat zrange workaround. If the 32-bit value
+	 * stored at this offset is UINT_MAX, the driver will emit
+	 * DB_Z_INFO.ZRANGE_PRECISION=0, otherwise it will skip the
+	 * SET_CONTEXT_REG packet.
+	 */
+	uint64_t tc_compat_zrange_offset;
 
 	/* For VK_ANDROID_native_buffer, the WSI image owns the memory, */
 	VkDeviceMemory owned_memory;

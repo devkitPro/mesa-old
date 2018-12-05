@@ -341,7 +341,7 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       _eglLinkConfig(&conf->base);
    }
    else {
-      assert(0);
+      unreachable("duplicates should not be possible");
       return NULL;
    }
 
@@ -483,75 +483,14 @@ static const __DRIextension **
 dri2_open_driver(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-   const __DRIextension **extensions = NULL;
-   char path[PATH_MAX], *search_paths, *next, *end;
-   char *get_extensions_name;
-   const __DRIextension **(*get_extensions)(void);
+   static const char *search_path_vars[] = {
+      "LIBGL_DRIVERS_PATH",
+      NULL,
+   };
 
-   search_paths = NULL;
-   if (geteuid() == getuid()) {
-      /* don't allow setuid apps to use LIBGL_DRIVERS_PATH */
-      search_paths = getenv("LIBGL_DRIVERS_PATH");
-   }
-   if (search_paths == NULL)
-      search_paths = DEFAULT_DRIVER_DIR;
-
-   dri2_dpy->driver = NULL;
-   end = search_paths + strlen(search_paths);
-   for (char *p = search_paths; p < end; p = next + 1) {
-      int len;
-      next = strchr(p, ':');
-      if (next == NULL)
-         next = end;
-
-      len = next - p;
-#if GLX_USE_TLS
-      snprintf(path, sizeof path,
-               "%.*s/tls/%s_dri.so", len, p, dri2_dpy->driver_name);
-      dri2_dpy->driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-#endif
-      if (dri2_dpy->driver == NULL) {
-         snprintf(path, sizeof path,
-                  "%.*s/%s_dri.so", len, p, dri2_dpy->driver_name);
-         dri2_dpy->driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-         if (dri2_dpy->driver == NULL)
-            _eglLog(_EGL_DEBUG, "failed to open %s: %s\n", path, dlerror());
-      }
-      /* not need continue to loop all paths once the driver is found */
-      if (dri2_dpy->driver != NULL)
-         break;
-   }
-
-   if (dri2_dpy->driver == NULL) {
-      _eglLog(_EGL_WARNING,
-              "DRI2: failed to open %s (search paths %s)",
-              dri2_dpy->driver_name, search_paths);
-      return NULL;
-   }
-
-   _eglLog(_EGL_DEBUG, "DRI2: dlopen(%s)", path);
-
-   get_extensions_name = loader_get_extensions_name(dri2_dpy->driver_name);
-   if (get_extensions_name) {
-      get_extensions = dlsym(dri2_dpy->driver, get_extensions_name);
-      if (get_extensions) {
-         extensions = get_extensions();
-      } else {
-         _eglLog(_EGL_DEBUG, "driver does not expose %s(): %s\n",
-                 get_extensions_name, dlerror());
-      }
-      free(get_extensions_name);
-   }
-
-   if (!extensions)
-      extensions = dlsym(dri2_dpy->driver, __DRI_DRIVER_EXTENSIONS);
-   if (extensions == NULL) {
-      _eglLog(_EGL_WARNING,
-              "DRI2: driver exports no extensions (%s)", dlerror());
-      dlclose(dri2_dpy->driver);
-   }
-
-   return extensions;
+   return loader_open_driver(dri2_dpy->driver_name,
+                             &dri2_dpy->driver,
+                             search_path_vars);
 }
 
 EGLBoolean
@@ -900,6 +839,8 @@ dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
       return EGL_TRUE;
    }
 
+   loader_set_logger(_eglLog);
+
    switch (disp->Platform) {
    case _EGL_PLATFORM_SURFACELESS:
       ret = dri2_initialize_surfaceless(drv, disp);
@@ -1108,7 +1049,7 @@ dri2_create_context_attribs_error(int dri_error)
       break;
 
    default:
-      assert(0);
+      assert(!"unknown dri_error code");
       egl_error = EGL_BAD_MATCH;
       break;
    }
@@ -1815,7 +1756,7 @@ dri2_release_tex_image(_EGLDriver *drv,
       target = GL_TEXTURE_2D;
       break;
    default:
-      assert(0);
+      assert(!"missing texture target");
    }
 
    if (dri2_dpy->tex_buffer->base.version >= 3 &&
@@ -1878,7 +1819,7 @@ egl_error_from_dri_image_error(int dri_error)
    case __DRI_IMAGE_ERROR_BAD_ACCESS:
       return EGL_BAD_ACCESS;
    default:
-      assert(0);
+      assert(!"unknown dri_error code");
       return EGL_BAD_ALLOC;
    }
 }
@@ -2278,6 +2219,7 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_YVYU:
    case DRM_FORMAT_UYVY:
    case DRM_FORMAT_VYUY:
+   case DRM_FORMAT_AYUV:
       return 1;
 
    case DRM_FORMAT_NV12:
@@ -2309,7 +2251,7 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
 {
    unsigned plane_n = dri2_num_fourcc_format_planes(attrs->DMABufFourCC.Value);
    if (plane_n == 0) {
-      _eglError(EGL_BAD_ATTRIBUTE, "invalid format");
+      _eglError(EGL_BAD_MATCH, "unknown drm fourcc format");
       return 0;
    }
 
@@ -3255,16 +3197,11 @@ dri2_interop_export_object(_EGLDisplay *dpy, _EGLContext *ctx,
 
 /**
  * This is the main entrypoint into the driver, called by libEGL.
- * Create a new _EGLDriver object and init its dispatch table.
+ * Gets an _EGLDriver object and init its dispatch table.
  */
-_EGLDriver *
-_eglBuiltInDriver(void)
+void
+_eglInitDriver(_EGLDriver *dri2_drv)
 {
-   _EGLDriver *dri2_drv = calloc(1, sizeof *dri2_drv);
-   if (!dri2_drv)
-      return NULL;
-
-   _eglInitDriverFallbacks(dri2_drv);
    dri2_drv->API.Initialize = dri2_initialize;
    dri2_drv->API.Terminate = dri2_terminate;
    dri2_drv->API.CreateContext = dri2_create_context;
@@ -3314,8 +3251,4 @@ _eglBuiltInDriver(void)
    dri2_drv->API.GLInteropExportObject = dri2_interop_export_object;
    dri2_drv->API.DupNativeFenceFDANDROID = dri2_dup_native_fence_fd;
    dri2_drv->API.SetBlobCacheFuncsANDROID = dri2_set_blob_cache_funcs;
-
-   dri2_drv->Name = "DRI2";
-
-   return dri2_drv;
 }

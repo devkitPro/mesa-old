@@ -51,13 +51,20 @@ subdir('util')
 subdir('mapi')
 # TODO: opengl
 subdir('compiler')
-subdir('egl/wayland/wayland-drm')
-subdir('vulkan')
+if with_platform_wayland
+  subdir('egl/wayland/wayland-drm')
+endif
+if with_any_vk
+  subdir('vulkan')
+endif
 if with_gallium_radeonsi or with_amd_vk
   subdir('amd')
 endif
 if with_gallium_vc4 or with_gallium_v3d
   subdir('broadcom')
+endif
+if with_gallium_freedreno
+  subdir('freedreno')
 endif
 if with_dri_i965 or with_intel_vk
   subdir('intel')
@@ -82,7 +89,7 @@ if with_gallium
   subdir('gallium')
   # This has to be here since it requires libgallium, and subdir cannot
   # contain ..
-  if with_tests
+  if with_tests and with_shared_glapi
     subdir('mesa/state_tracker/tests')
   endif
 endif

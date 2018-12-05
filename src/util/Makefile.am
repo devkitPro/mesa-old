@@ -21,6 +21,7 @@
 
 SUBDIRS = . \
 	xmlpool \
+	tests/fast_idiv_by_const \
 	tests/hash_table \
 	tests/string_buffer \
 	tests/set
@@ -59,7 +60,8 @@ libmesautil_la_LIBADD = \
 	$(PTHREAD_LIBS) \
 	$(CLOCK_LIB) \
 	$(ZLIB_LIBS) \
-	$(LIBATOMIC_LIBS)
+	$(LIBATOMIC_LIBS) \
+	-lm
 
 if HAVE_DRICOMMON
 libxmlconfig_la_SOURCES = $(XMLCONFIG_FILES)
@@ -95,7 +97,7 @@ EXTRA_DIST = \
 	sha1/README \
 	meson.build
 
-PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
+PYTHON_GEN = $(AM_V_GEN)$(PYTHON) $(PYTHON_FLAGS)
 
 format_srgb.c: format_srgb.py
 	$(PYTHON_GEN) $(srcdir)/format_srgb.py > $@

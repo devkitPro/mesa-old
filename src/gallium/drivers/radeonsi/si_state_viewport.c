@@ -107,6 +107,7 @@ static void si_scissor_make_union(struct si_signed_scissor *out,
 	out->miny = MIN2(out->miny, in->miny);
 	out->maxx = MAX2(out->maxx, in->maxx);
 	out->maxy = MAX2(out->maxy, in->maxy);
+	out->quant_mode = MIN2(out->quant_mode, in->quant_mode);
 }
 
 static void si_emit_one_scissor(struct si_context *ctx,
@@ -126,6 +127,18 @@ static void si_emit_one_scissor(struct si_context *ctx,
 	if (scissor)
 		si_clip_scissor(&final, scissor);
 
+	/* Workaround for a hw bug on SI that occurs when PA_SU_HARDWARE_-
+	 * SCREEN_OFFSET != 0 and any_scissor.BR_X/Y <= 0.
+	 */
+	if (ctx->chip_class == SI && (final.maxx == 0 || final.maxy == 0)) {
+		radeon_emit(cs, S_028250_TL_X(1) |
+				S_028250_TL_Y(1) |
+				S_028250_WINDOW_OFFSET_DISABLE(1));
+		radeon_emit(cs, S_028254_BR_X(1) |
+				S_028254_BR_Y(1));
+		return;
+	}
+
 	radeon_emit(cs, S_028250_TL_X(final.minx) |
 			S_028250_TL_Y(final.miny) |
 			S_028250_WINDOW_OFFSET_DISABLE(1));
@@ -133,13 +146,10 @@ static void si_emit_one_scissor(struct si_context *ctx,
 			S_028254_BR_Y(final.maxy));
 }
 
-/* the range is [-MAX, MAX] */
-#define SI_MAX_VIEWPORT_RANGE 32768
-
 static void si_emit_guardband(struct si_context *ctx)
 {
-	const struct si_signed_scissor *vp_as_scissor;
-	struct si_signed_scissor max_vp_scissor;
+	const struct si_state_rasterizer *rs = ctx->queued.named.rasterizer;
+	struct si_signed_scissor vp_as_scissor;
 	struct pipe_viewport_state vp;
 	float left, top, right, bottom, max_range, guardband_x, guardband_y;
 	float discard_x, discard_y;
@@ -147,26 +157,56 @@ static void si_emit_guardband(struct si_context *ctx)
 	if (ctx->vs_writes_viewport_index) {
 		/* Shaders can draw to any viewport. Make a union of all
 		 * viewports. */
-		max_vp_scissor = ctx->viewports.as_scissor[0];
+		vp_as_scissor = ctx->viewports.as_scissor[0];
 		for (unsigned i = 1; i < SI_MAX_VIEWPORTS; i++) {
-			si_scissor_make_union(&max_vp_scissor,
+			si_scissor_make_union(&vp_as_scissor,
 					      &ctx->viewports.as_scissor[i]);
 		}
-		vp_as_scissor = &max_vp_scissor;
 	} else {
-		vp_as_scissor = &ctx->viewports.as_scissor[0];
+		vp_as_scissor = ctx->viewports.as_scissor[0];
 	}
 
+	/* Blits don't set the viewport state. The vertex shader determines
+	 * the viewport size by scaling the coordinates, so we don't know
+	 * how large the viewport is. Assume the worst case.
+	 */
+	if (ctx->vs_disables_clipping_viewport)
+		vp_as_scissor.quant_mode = SI_QUANT_MODE_16_8_FIXED_POINT_1_256TH;
+
+	/* Determine the optimal hardware screen offset to center the viewport
+	 * within the viewport range in order to maximize the guardband size.
+	 */
+	int hw_screen_offset_x = (vp_as_scissor.maxx + vp_as_scissor.minx) / 2;
+	int hw_screen_offset_y = (vp_as_scissor.maxy + vp_as_scissor.miny) / 2;
+
+	const unsigned hw_screen_offset_max = 8176;
+	/* SI-CI need to align the offset to an ubertile consisting of all SEs. */
+	const unsigned hw_screen_offset_alignment =
+		ctx->chip_class >= VI ? 16 : MAX2(ctx->screen->se_tile_repeat, 16);
+
+	hw_screen_offset_x = CLAMP(hw_screen_offset_x, 0, hw_screen_offset_max);
+	hw_screen_offset_y = CLAMP(hw_screen_offset_y, 0, hw_screen_offset_max);
+
+	/* Align the screen offset by dropping the low bits. */
+	hw_screen_offset_x &= ~(hw_screen_offset_alignment - 1);
+	hw_screen_offset_y &= ~(hw_screen_offset_alignment - 1);
+
+	/* Apply the offset to center the viewport and maximize the guardband. */
+	vp_as_scissor.minx -= hw_screen_offset_x;
+	vp_as_scissor.maxx -= hw_screen_offset_x;
+	vp_as_scissor.miny -= hw_screen_offset_y;
+	vp_as_scissor.maxy -= hw_screen_offset_y;
+
 	/* Reconstruct the viewport transformation from the scissor. */
-	vp.translate[0] = (vp_as_scissor->minx + vp_as_scissor->maxx) / 2.0;
-	vp.translate[1] = (vp_as_scissor->miny + vp_as_scissor->maxy) / 2.0;
-	vp.scale[0] = vp_as_scissor->maxx - vp.translate[0];
-	vp.scale[1] = vp_as_scissor->maxy - vp.translate[1];
+	vp.translate[0] = (vp_as_scissor.minx + vp_as_scissor.maxx) / 2.0;
+	vp.translate[1] = (vp_as_scissor.miny + vp_as_scissor.maxy) / 2.0;
+	vp.scale[0] = vp_as_scissor.maxx - vp.translate[0];
+	vp.scale[1] = vp_as_scissor.maxy - vp.translate[1];
 
 	/* Treat a 0x0 viewport as 1x1 to prevent division by zero. */
-	if (vp_as_scissor->minx == vp_as_scissor->maxx)
+	if (vp_as_scissor.minx == vp_as_scissor.maxx)
 		vp.scale[0] = 0.5;
-	if (vp_as_scissor->miny == vp_as_scissor->maxy)
+	if (vp_as_scissor.miny == vp_as_scissor.maxy)
 		vp.scale[1] = 0.5;
 
 	/* Find the biggest guard band that is inside the supported viewport
@@ -176,9 +216,11 @@ static void si_emit_guardband(struct si_context *ctx)
 	 * This is done by applying the inverse viewport transformation
 	 * on the viewport limits to get those limits in clip space.
 	 *
-	 * Use a limit one pixel smaller to allow for some precision error.
+	 * The viewport range is [-max_viewport_size/2, max_viewport_size/2].
 	 */
-	max_range = SI_MAX_VIEWPORT_RANGE - 1;
+	static unsigned max_viewport_size[] = {65535, 16383, 4095};
+	assert(vp_as_scissor.quant_mode < ARRAY_SIZE(max_viewport_size));
+	max_range = max_viewport_size[vp_as_scissor.quant_mode] / 2;
 	left   = (-max_range - vp.translate[0]) / vp.scale[0];
 	right  = ( max_range - vp.translate[0]) / vp.scale[0];
 	top    = (-max_range - vp.translate[1]) / vp.scale[1];
@@ -195,7 +237,6 @@ static void si_emit_guardband(struct si_context *ctx)
 	if (unlikely(util_prim_is_points_or_lines(ctx->current_rast_prim))) {
 		/* When rendering wide points or lines, we need to be more
 		 * conservative about when to discard them entirely. */
-		const struct si_state_rasterizer *rs = ctx->queued.named.rasterizer;
 		float pixels;
 
 		if (ctx->current_rast_prim == PIPE_PRIM_POINTS)
@@ -217,10 +258,22 @@ static void si_emit_guardband(struct si_context *ctx)
 	 * R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, R_028BEC_PA_CL_GB_VERT_DISC_ADJ
 	 * R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, R_028BF4_PA_CL_GB_HORZ_DISC_ADJ
 	 */
+	unsigned initial_cdw = ctx->gfx_cs->current.cdw;
 	radeon_opt_set_context_reg4(ctx, R_028BE8_PA_CL_GB_VERT_CLIP_ADJ,
 				    SI_TRACKED_PA_CL_GB_VERT_CLIP_ADJ,
 				    fui(guardband_y), fui(discard_y),
 				    fui(guardband_x), fui(discard_x));
+	radeon_opt_set_context_reg(ctx, R_028234_PA_SU_HARDWARE_SCREEN_OFFSET,
+				   SI_TRACKED_PA_SU_HARDWARE_SCREEN_OFFSET,
+				   S_028234_HW_SCREEN_OFFSET_X(hw_screen_offset_x >> 4) |
+				   S_028234_HW_SCREEN_OFFSET_Y(hw_screen_offset_y >> 4));
+	radeon_opt_set_context_reg(ctx, R_028BE4_PA_SU_VTX_CNTL,
+				   SI_TRACKED_PA_SU_VTX_CNTL,
+				   S_028BE4_PIX_CENTER(rs->half_pixel_center) |
+				   S_028BE4_QUANT_MODE(V_028BE4_X_16_8_FIXED_POINT_1_256TH +
+						       vp_as_scissor.quant_mode));
+	if (initial_cdw != ctx->gfx_cs->current.cdw)
+		ctx->context_roll_counter++;
 }
 
 static void si_emit_scissors(struct si_context *ctx)
@@ -269,10 +322,33 @@ static void si_set_viewport_states(struct pipe_context *pctx,
 
 	for (i = 0; i < num_viewports; i++) {
 		unsigned index = start_slot + i;
+		struct si_signed_scissor *scissor = &ctx->viewports.as_scissor[index];
 
 		ctx->viewports.states[index] = state[i];
-		si_get_scissor_from_viewport(ctx, &state[i],
-					     &ctx->viewports.as_scissor[index]);
+
+		si_get_scissor_from_viewport(ctx, &state[i], scissor);
+
+		unsigned w = scissor->maxx - scissor->minx;
+		unsigned h = scissor->maxy - scissor->miny;
+		unsigned max_extent = MAX2(w, h);
+
+		/* Determine the best quantization mode (subpixel precision),
+		 * but also leave enough space for the guardband.
+		 *
+		 * Note that primitive binning requires QUANT_MODE == 16_8 on Vega10
+		 * and Raven1. What we do depends on the chip:
+		 * - Vega10: Never use primitive binning.
+		 * - Raven1: Always use QUANT_MODE == 16_8.
+		 */
+		if (ctx->family == CHIP_RAVEN)
+			max_extent = 16384; /* Use QUANT_MODE == 16_8. */
+
+		if (max_extent <= 1024) /* 4K scanline area for guardband */
+			scissor->quant_mode = SI_QUANT_MODE_12_12_FIXED_POINT_1_4096TH;
+		else if (max_extent <= 4096) /* 16K scanline area for guardband */
+			scissor->quant_mode = SI_QUANT_MODE_14_10_FIXED_POINT_1_1024TH;
+		else /* 64K scanline area for guardband */
+			scissor->quant_mode = SI_QUANT_MODE_16_8_FIXED_POINT_1_256TH;
 	}
 
 	mask = ((1 << num_viewports) - 1) << start_slot;
@@ -523,4 +599,7 @@ void si_init_viewport_functions(struct si_context *ctx)
 	ctx->b.set_scissor_states = si_set_scissor_states;
 	ctx->b.set_viewport_states = si_set_viewport_states;
 	ctx->b.set_window_rectangles = si_set_window_rectangles;
+
+	for (unsigned i = 0; i < 16; i++)
+		ctx->viewports.as_scissor[i].quant_mode = SI_QUANT_MODE_16_8_FIXED_POINT_1_256TH;
 }

@@ -39,50 +39,45 @@
 #include "fd6_texture.h"
 #include "fd6_format.h"
 
-static void
-delete_shader_stateobj(struct fd6_shader_stateobj *so)
-{
-	ir3_shader_destroy(so->shader);
-	free(so);
-}
-
-static struct fd6_shader_stateobj *
+static struct ir3_shader *
 create_shader_stateobj(struct pipe_context *pctx, const struct pipe_shader_state *cso,
-		enum shader_t type)
+		gl_shader_stage type)
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct ir3_compiler *compiler = ctx->screen->compiler;
-	struct fd6_shader_stateobj *so = CALLOC_STRUCT(fd6_shader_stateobj);
-	so->shader = ir3_shader_create(compiler, cso, type, &ctx->debug);
-	return so;
+	return ir3_shader_create(compiler, cso, type, &ctx->debug);
 }
 
 static void *
 fd6_fp_state_create(struct pipe_context *pctx,
 		const struct pipe_shader_state *cso)
 {
-	return create_shader_stateobj(pctx, cso, SHADER_FRAGMENT);
+	return create_shader_stateobj(pctx, cso, MESA_SHADER_FRAGMENT);
 }
 
 static void
 fd6_fp_state_delete(struct pipe_context *pctx, void *hwcso)
 {
-	struct fd6_shader_stateobj *so = hwcso;
-	delete_shader_stateobj(so);
+	struct ir3_shader *so = hwcso;
+	struct fd_context *ctx = fd_context(pctx);
+	ir3_cache_invalidate(fd6_context(ctx)->shader_cache, hwcso);
+	ir3_shader_destroy(so);
 }
 
 static void *
 fd6_vp_state_create(struct pipe_context *pctx,
 		const struct pipe_shader_state *cso)
 {
-	return create_shader_stateobj(pctx, cso, SHADER_VERTEX);
+	return create_shader_stateobj(pctx, cso, MESA_SHADER_VERTEX);
 }
 
 static void
 fd6_vp_state_delete(struct pipe_context *pctx, void *hwcso)
 {
-	struct fd6_shader_stateobj *so = hwcso;
-	delete_shader_stateobj(so);
+	struct ir3_shader *so = hwcso;
+	struct fd_context *ctx = fd_context(pctx);
+	ir3_cache_invalidate(fd6_context(ctx)->shader_cache, hwcso);
+	ir3_shader_destroy(so);
 }
 
 void
@@ -105,11 +100,11 @@ fd6_emit_shader(struct fd_ringbuffer *ring, const struct ir3_shader_variant *so)
 	}
 
 	switch (so->type) {
-	case SHADER_VERTEX:
+	case MESA_SHADER_VERTEX:
 		opcode = CP_LOAD_STATE6_GEOM;
 		break;
-	case SHADER_FRAGMENT:
-	case SHADER_COMPUTE:
+	case MESA_SHADER_FRAGMENT:
+	case MESA_SHADER_COMPUTE:
 		opcode = CP_LOAD_STATE6_FRAG;
 		break;
 	default:
@@ -145,14 +140,14 @@ fd6_emit_shader(struct fd_ringbuffer *ring, const struct ir3_shader_variant *so)
 static void
 link_stream_out(struct ir3_shader_linkage *l, const struct ir3_shader_variant *v)
 {
-	const struct pipe_stream_output_info *strmout = &v->shader->stream_output;
+	const struct ir3_stream_output_info *strmout = &v->shader->stream_output;
 
 	/*
 	 * First, any stream-out varyings not already in linkage map (ie. also
 	 * consumed by frag shader) need to be added:
 	 */
 	for (unsigned i = 0; i < strmout->num_outputs; i++) {
-		const struct pipe_stream_output *out = &strmout->output[i];
+		const struct ir3_stream_output *out = &strmout->output[i];
 		unsigned k = out->register_index;
 		unsigned compmask =
 			(1 << (out->num_components + out->start_component)) - 1;
@@ -187,11 +182,11 @@ link_stream_out(struct ir3_shader_linkage *l, const struct ir3_shader_variant *v
 }
 
 static void
-setup_stream_out(struct fd_context *ctx, const struct ir3_shader_variant *v,
+setup_stream_out(struct fd6_program_state *state, const struct ir3_shader_variant *v,
 		struct ir3_shader_linkage *l)
 {
-	const struct pipe_stream_output_info *strmout = &v->shader->stream_output;
-	struct fd6_streamout_state *tf = &fd6_context(ctx)->tf;
+	const struct ir3_stream_output_info *strmout = &v->shader->stream_output;
+	struct fd6_streamout_state *tf = &state->tf;
 
 	memset(tf, 0, sizeof(*tf));
 
@@ -200,7 +195,7 @@ setup_stream_out(struct fd_context *ctx, const struct ir3_shader_variant *v,
 	debug_assert(tf->prog_count < ARRAY_SIZE(tf->prog));
 
 	for (unsigned i = 0; i < strmout->num_outputs; i++) {
-		const struct pipe_stream_output *out = &strmout->output[i];
+		const struct ir3_stream_output *out = &strmout->output[i];
 		unsigned k = out->register_index;
 		unsigned idx;
 
@@ -260,20 +255,26 @@ enum {
 };
 
 static void
-setup_stages(struct fd6_emit *emit, struct stage *s)
+setup_stages(struct fd6_program_state *state, struct stage *s, bool binning_pass)
 {
 	unsigned i;
 
-	s[VS].v = fd6_emit_get_vp(emit);
-	s[FS].v = fd6_emit_get_fp(emit);
+	if (binning_pass) {
+		static const struct ir3_shader_variant dummy_fs = {0};
+
+		s[VS].v = state->bs;
+		s[FS].v = &dummy_fs;
+	} else {
+		s[VS].v = state->vs;
+		s[FS].v = state->fs;
+	}
 
 	s[HS].v = s[DS].v = s[GS].v = NULL;  /* for now */
 
 	for (i = 0; i < MAX_STAGES; i++) {
 		if (s[i].v) {
 			s[i].i = &s[i].v->info;
-			/* constlen is in units of 4 * vec4: */
-			s[i].constlen = align(s[i].v->constlen, 4) / 4;
+			s[i].constlen = align(s[i].v->constlen, 4);
 			/* instrlen is already in units of 16 instr.. although
 			 * probably we should ditch that and not make the compiler
 			 * care about instruction group size of a3xx vs a5xx
@@ -297,21 +298,21 @@ setup_stages(struct fd6_emit *emit, struct stage *s)
 	s[HS].instroff = s[DS].instroff = s[GS].instroff = s[FS].instroff;
 }
 
-void
-fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
-				 struct fd6_emit *emit)
+static void
+setup_stateobj(struct fd_ringbuffer *ring,
+               struct fd6_program_state *state, bool binning_pass)
 {
 	struct stage s[MAX_STAGES];
-	uint32_t pos_regid, psize_regid, color_regid[8];
+	uint32_t pos_regid, psize_regid, color_regid[8], posz_regid;
 	uint32_t face_regid, coord_regid, zwcoord_regid, samp_id_regid, samp_mask_regid;
 	uint32_t vcoord_regid, vertex_regid, instance_regid;
 	enum a3xx_threadsize fssz;
 	uint8_t psize_loc = ~0;
 	int i, j;
 
-	setup_stages(emit, s);
+	setup_stages(state, s, binning_pass);
 
-	fssz = (s[FS].i->max_reg >= 24) ? TWO_QUADS : FOUR_QUADS;
+	fssz = FOUR_QUADS;
 
 	pos_regid = ir3_find_output_regid(s[VS].v, VARYING_SLOT_POS);
 	psize_regid = ir3_find_output_regid(s[VS].v, VARYING_SLOT_PSIZ);
@@ -339,19 +340,16 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	coord_regid     = ir3_find_sysval_regid(s[FS].v, SYSTEM_VALUE_FRAG_COORD);
 	zwcoord_regid   = (coord_regid == regid(63,0)) ? regid(63,0) : (coord_regid + 2);
 	vcoord_regid    = ir3_find_sysval_regid(s[FS].v, SYSTEM_VALUE_VARYING_COORD);
+	posz_regid      = ir3_find_output_regid(s[FS].v, FRAG_RESULT_DEPTH);
 
 	/* we could probably divide this up into things that need to be
 	 * emitted if frag-prog is dirty vs if vert-prog is dirty..
 	 */
 
-	OUT_PKT4(ring, REG_A6XX_SP_VS_TEX_COUNT, 1);
-	OUT_RING(ring, 0);
-
-	struct fd_texture_stateobj *tex = &ctx->tex[PIPE_SHADER_VERTEX];
 	OUT_PKT4(ring, REG_A6XX_SP_VS_CONFIG, 2);
 	OUT_RING(ring, COND(s[VS].v, A6XX_SP_VS_CONFIG_ENABLED) |
-			 A6XX_SP_VS_CONFIG_NTEX(tex->num_textures) |
-			 A6XX_SP_VS_CONFIG_NSAMP(tex->num_samplers));     /* SP_VS_CONFIG */
+			 A6XX_SP_VS_CONFIG_NTEX(s[VS].v->num_samp) |
+			 A6XX_SP_VS_CONFIG_NSAMP(s[VS].v->num_samp));     /* SP_VS_CONFIG */
 	OUT_RING(ring, s[VS].instrlen);							  /* SP_VS_INSTRLEN */
 
 	OUT_PKT4(ring, REG_A6XX_SP_HS_UNKNOWN_A831, 1);
@@ -381,35 +379,36 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	OUT_PKT4(ring, REG_A6XX_SP_UNKNOWN_AB00, 1);
 	OUT_RING(ring, 0x5);
 
-	tex = &ctx->tex[PIPE_SHADER_FRAGMENT];
 	OUT_PKT4(ring, REG_A6XX_SP_FS_CONFIG, 2);
 	OUT_RING(ring, COND(s[FS].v, A6XX_SP_FS_CONFIG_ENABLED) |
-			 A6XX_SP_FS_CONFIG_NTEX(tex->num_textures) |
-			 A6XX_SP_FS_CONFIG_NSAMP(tex->num_samplers));
-															/* SP_FS_CONFIG */
+			 A6XX_SP_FS_CONFIG_NTEX(s[FS].v->num_samp) |
+			 A6XX_SP_FS_CONFIG_NSAMP(s[FS].v->num_samp));     /* SP_FS_CONFIG */
 	OUT_RING(ring, s[FS].instrlen);							  /* SP_FS_INSTRLEN */
 
+	OUT_PKT4(ring, REG_A6XX_SP_FS_OUTPUT_CNTL0, 1);
+	OUT_RING(ring, A6XX_SP_FS_OUTPUT_CNTL0_DEPTH_REGID(posz_regid) |
+			 0xfcfc0000);
+
 	OUT_PKT4(ring, REG_A6XX_HLSQ_VS_CNTL, 4);
-	OUT_RING(ring, A6XX_HLSQ_VS_CNTL_CONSTLEN(align(s[VS].constlen, 4)) | 0x100);    /* HLSQ_VS_CONSTLEN */
-	OUT_RING(ring, A6XX_HLSQ_HS_CNTL_CONSTLEN(align(s[HS].constlen, 4)));    /* HLSQ_HS_CONSTLEN */
-	OUT_RING(ring, A6XX_HLSQ_DS_CNTL_CONSTLEN(align(s[DS].constlen, 4)));    /* HLSQ_DS_CONSTLEN */
-	OUT_RING(ring, A6XX_HLSQ_GS_CNTL_CONSTLEN(align(s[GS].constlen, 4)));    /* HLSQ_GS_CONSTLEN */
+	OUT_RING(ring, A6XX_HLSQ_VS_CNTL_CONSTLEN(s[VS].constlen) | 0x100);    /* HLSQ_VS_CONSTLEN */
+	OUT_RING(ring, A6XX_HLSQ_HS_CNTL_CONSTLEN(s[HS].constlen));    /* HLSQ_HS_CONSTLEN */
+	OUT_RING(ring, A6XX_HLSQ_DS_CNTL_CONSTLEN(s[DS].constlen));    /* HLSQ_DS_CONSTLEN */
+	OUT_RING(ring, A6XX_HLSQ_GS_CNTL_CONSTLEN(s[GS].constlen));    /* HLSQ_GS_CONSTLEN */
 
 	OUT_PKT4(ring, REG_A6XX_HLSQ_FS_CNTL, 1);
-	OUT_RING(ring, s[FS].constlen | 0x100);    /* HLSQ_FS_CONSTLEN */
+	OUT_RING(ring, A6XX_HLSQ_VS_CNTL_CONSTLEN(s[FS].constlen) | 0x100);    /* HLSQ_FS_CONSTLEN */
 
 	OUT_PKT4(ring, REG_A6XX_SP_VS_CTRL_REG0, 1);
 	OUT_RING(ring, A6XX_SP_VS_CTRL_REG0_THREADSIZE(fssz) |
 			A6XX_SP_VS_CTRL_REG0_FULLREGFOOTPRINT(s[VS].i->max_reg + 1) |
 			A6XX_SP_VS_CTRL_REG0_MERGEDREGS |
 			A6XX_SP_VS_CTRL_REG0_BRANCHSTACK(0x3) |  // XXX need to figure this out somehow..
-			COND(s[VS].v->has_samp, A6XX_SP_VS_CTRL_REG0_PIXLODENABLE));
+			COND(s[VS].v->num_samp > 0, A6XX_SP_VS_CTRL_REG0_PIXLODENABLE));
 
 	struct ir3_shader_linkage l = {0};
 	ir3_link_shaders(&l, s[VS].v, s[FS].v);
 
-	if ((s[VS].v->shader->stream_output.num_outputs > 0) &&
-			!emit->key.binning_pass)
+	if ((s[VS].v->shader->stream_output.num_outputs > 0) && !binning_pass)
 		link_stream_out(&l, s[VS].v);
 
 	BITSET_DECLARE(varbs, 128) = {0};
@@ -434,9 +433,8 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		ir3_link_add(&l, psize_regid, 0x1, l.max_loc);
 	}
 
-	if ((s[VS].v->shader->stream_output.num_outputs > 0) &&
-			!emit->key.binning_pass) {
-		setup_stream_out(ctx, s[VS].v, &l);
+	if ((s[VS].v->shader->stream_output.num_outputs > 0) && !binning_pass) {
+		setup_stream_out(state, s[VS].v, &l);
 	}
 
 	for (i = 0, j = 0; (i < 16) && (j < l.cnt); i++) {
@@ -494,7 +492,7 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	OUT_RING(ring, A6XX_PC_PRIMITIVE_CNTL_1_STRIDE_IN_VPC(l.max_loc) |
 			 COND(psize_regid != regid(63,0), 0x100));
 
-	if (emit->key.binning_pass) {
+	if (binning_pass) {
 		OUT_PKT4(ring, REG_A6XX_SP_FS_OBJ_START_LO, 2);
 		OUT_RING(ring, 0x00000000);    /* SP_FS_OBJ_START_LO */
 		OUT_RING(ring, 0x00000000);    /* SP_FS_OBJ_START_HI */
@@ -527,7 +525,7 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			A6XX_SP_FS_CTRL_REG0_FULLREGFOOTPRINT(s[FS].i->max_reg + 1) |
 			A6XX_SP_FS_CTRL_REG0_MERGEDREGS |
 			A6XX_SP_FS_CTRL_REG0_BRANCHSTACK(0x3) |  // XXX need to figure this out somehow..
-			COND(s[FS].v->has_samp, A6XX_SP_FS_CTRL_REG0_PIXLODENABLE));
+			COND(s[FS].v->num_samp > 0, A6XX_SP_FS_CTRL_REG0_PIXLODENABLE));
 
 	OUT_PKT4(ring, REG_A6XX_SP_UNKNOWN_A982, 1);
 	OUT_RING(ring, 0);        /* XXX */
@@ -545,7 +543,9 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	OUT_PKT4(ring, REG_A6XX_GRAS_CNTL, 1);
 	OUT_RING(ring, COND(enable_varyings, A6XX_GRAS_CNTL_VARYING) |
-			COND(s[FS].v->frag_coord, A6XX_GRAS_CNTL_XCOORD |
+			COND(s[FS].v->frag_coord,
+					A6XX_GRAS_CNTL_UNK3 |
+					A6XX_GRAS_CNTL_XCOORD |
 					A6XX_GRAS_CNTL_YCOORD |
 					A6XX_GRAS_CNTL_ZCOORD |
 					A6XX_GRAS_CNTL_WCOORD));
@@ -553,7 +553,9 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	OUT_PKT4(ring, REG_A6XX_RB_RENDER_CONTROL0, 2);
 	OUT_RING(ring, COND(enable_varyings, A6XX_RB_RENDER_CONTROL0_VARYING |
 			A6XX_RB_RENDER_CONTROL0_UNK10) |
-			COND(s[FS].v->frag_coord, A6XX_RB_RENDER_CONTROL0_XCOORD |
+			COND(s[FS].v->frag_coord,
+					A6XX_RB_RENDER_CONTROL0_UNK3 |
+					A6XX_RB_RENDER_CONTROL0_XCOORD |
 					A6XX_RB_RENDER_CONTROL0_YCOORD |
 					A6XX_RB_RENDER_CONTROL0_ZCOORD |
 					A6XX_RB_RENDER_CONTROL0_WCOORD));
@@ -561,8 +563,10 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	OUT_PKT4(ring, REG_A6XX_SP_FS_OUTPUT_REG(0), 8);
 	for (i = 0; i < 8; i++) {
+		// TODO we could have a mix of half and full precision outputs,
+		// we really need to figure out half-precision from IR3_REG_HALF
 		OUT_RING(ring, A6XX_SP_FS_OUTPUT_REG_REGID(color_regid[i]) |
-				COND(emit->key.half_precision,
+				COND(false,
 					A6XX_SP_FS_OUTPUT_REG_HALF_PRECISION));
 	}
 
@@ -571,27 +575,7 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			 A6XX_VPC_PACK_PSIZELOC(psize_loc) |
 			 A6XX_VPC_PACK_STRIDE_IN_VPC(l.max_loc));
 
-	if (!emit->key.binning_pass) {
-		uint32_t vinterp[8], vpsrepl[8];
-
-		memset(vinterp, 0, sizeof(vinterp));
-		memset(vpsrepl, 0, sizeof(vpsrepl));
-
-		/* looks like we need to do int varyings in the frag
-		 * shader on a5xx (no flatshad reg?  or a420.0 bug?):
-		 *
-		 *    (sy)(ss)nop
-		 *    (sy)ldlv.u32 r0.x,l[r0.x], 1
-		 *    ldlv.u32 r0.y,l[r0.x+1], 1
-		 *    (ss)bary.f (ei)r63.x, 0, r0.x
-		 *    (ss)(rpt1)cov.s32f16 hr0.x, (r)r0.x
-		 *    (rpt5)nop
-		 *    sam (f16)(xyzw)hr0.x, hr0.x, s#0, t#0
-		 *
-		 * Possibly on later a5xx variants we'll be able to use
-		 * something like the code below instead of workaround
-		 * in the shader:
-		 */
+	if (!binning_pass) {
 		/* figure out VARYING_INTERP / VARYING_PS_REPL register values: */
 		for (j = -1; (j = ir3_next_varying(s[FS].v, j)) < (int)s[FS].v->inputs_count; ) {
 			/* NOTE: varyings are packed, so if compmask is 0xb
@@ -602,20 +586,91 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 			uint32_t inloc = s[FS].v->inputs[j].inloc;
 
-			if ((s[FS].v->inputs[j].interpolate == INTERP_MODE_FLAT) ||
-					(s[FS].v->inputs[j].rasterflat && emit->rasterflat)) {
+			if (s[FS].v->inputs[j].interpolate == INTERP_MODE_FLAT) {
+				uint32_t loc = inloc;
+
+				for (i = 0; i < 4; i++) {
+					if (compmask & (1 << i)) {
+						state->vinterp[loc / 16] |= 1 << ((loc % 16) * 2);
+						loc++;
+					}
+				}
+			}
+		}
+	}
+
+	if (!binning_pass)
+		if (s[FS].instrlen)
+			fd6_emit_shader(ring, s[FS].v);
+
+	OUT_PKT4(ring, REG_A6XX_VFD_CONTROL_1, 6);
+	OUT_RING(ring, A6XX_VFD_CONTROL_1_REGID4VTX(vertex_regid) |
+			A6XX_VFD_CONTROL_1_REGID4INST(instance_regid) |
+			0xfcfc0000);
+	OUT_RING(ring, 0x0000fcfc);   /* VFD_CONTROL_2 */
+	OUT_RING(ring, 0xfcfcfcfc);   /* VFD_CONTROL_3 */
+	OUT_RING(ring, 0x000000fc);   /* VFD_CONTROL_4 */
+	OUT_RING(ring, 0x0000fcfc);   /* VFD_CONTROL_5 */
+	OUT_RING(ring, 0x00000000);   /* VFD_CONTROL_6 */
+
+	bool fragz = s[FS].v->has_kill | s[FS].v->writes_pos;
+
+	OUT_PKT4(ring, REG_A6XX_RB_DEPTH_PLANE_CNTL, 1);
+	OUT_RING(ring, COND(fragz, A6XX_RB_DEPTH_PLANE_CNTL_FRAG_WRITES_Z));
+
+	OUT_PKT4(ring, REG_A6XX_GRAS_SU_DEPTH_PLANE_CNTL, 1);
+	OUT_RING(ring, COND(fragz, A6XX_GRAS_SU_DEPTH_PLANE_CNTL_FRAG_WRITES_Z));
+}
+
+/* emits the program state which is not part of the stateobj because of
+ * dependency on other gl state (rasterflat or sprite-coord-replacement)
+ */
+void
+fd6_program_emit(struct fd_ringbuffer *ring, struct fd6_emit *emit)
+{
+	const struct fd6_program_state *state = fd6_emit_get_prog(emit);
+
+	if (!unlikely(emit->rasterflat || emit->sprite_coord_enable)) {
+		/* fastpath: */
+		OUT_PKT4(ring, REG_A6XX_VPC_VARYING_INTERP_MODE(0), 8);
+		for (int i = 0; i < 8; i++)
+			OUT_RING(ring, state->vinterp[i]);   /* VPC_VARYING_INTERP[i].MODE */
+
+		OUT_PKT4(ring, REG_A6XX_VPC_VARYING_PS_REPL_MODE(0), 8);
+		for (int i = 0; i < 8; i++)
+			OUT_RING(ring, 0x00000000);          /* VPC_VARYING_PS_REPL[i] */
+	} else {
+		/* slow-path: */
+		struct ir3_shader_variant *fs = state->fs;
+		uint32_t vinterp[8], vpsrepl[8];
+
+		memset(vinterp, 0, sizeof(vinterp));
+		memset(vpsrepl, 0, sizeof(vpsrepl));
+
+		for (int i = 0; i < state->fs_inputs_count; i++) {
+			int j = state->fs_inputs[i];
+
+			/* NOTE: varyings are packed, so if compmask is 0xb
+			 * then first, third, and fourth component occupy
+			 * three consecutive varying slots:
+			 */
+			unsigned compmask = fs->inputs[j].compmask;
+
+			uint32_t inloc = fs->inputs[j].inloc;
+
+			if ((fs->inputs[j].interpolate == INTERP_MODE_FLAT) ||
+					(fs->inputs[j].rasterflat && emit->rasterflat)) {
 				uint32_t loc = inloc;
 
 				for (i = 0; i < 4; i++) {
 					if (compmask & (1 << i)) {
 						vinterp[loc / 16] |= 1 << ((loc % 16) * 2);
-						//flatshade[loc / 32] |= 1 << (loc % 32);
 						loc++;
 					}
 				}
 			}
 
-			gl_varying_slot slot = s[FS].v->inputs[j].slot;
+			gl_varying_slot slot = fs->inputs[j].slot;
 
 			/* since we don't enable PIPE_CAP_TGSI_TEXCOORD: */
 			if (slot >= VARYING_SLOT_VAR0) {
@@ -654,32 +709,57 @@ fd6_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		}
 
 		OUT_PKT4(ring, REG_A6XX_VPC_VARYING_INTERP_MODE(0), 8);
-		for (i = 0; i < 8; i++)
+		for (int i = 0; i < 8; i++)
 			OUT_RING(ring, vinterp[i]);     /* VPC_VARYING_INTERP[i].MODE */
 
 		OUT_PKT4(ring, REG_A6XX_VPC_VARYING_PS_REPL_MODE(0), 8);
-		for (i = 0; i < 8; i++)
-			OUT_RING(ring, vpsrepl[i]);   /* VPC_VARYING_PS_REPL[i] */
+		for (int i = 0; i < 8; i++)
+			OUT_RING(ring, vpsrepl[i]);     /* VPC_VARYING_PS_REPL[i] */
 	}
-
-	if (!emit->key.binning_pass)
-		if (s[FS].instrlen)
-			fd6_emit_shader(ring, s[FS].v);
-
-	OUT_PKT4(ring, REG_A6XX_VFD_CONTROL_1, 6);
-	OUT_RING(ring, A6XX_VFD_CONTROL_1_REGID4VTX(vertex_regid) |
-			A6XX_VFD_CONTROL_1_REGID4INST(instance_regid) |
-			0xfcfc0000);
-	OUT_RING(ring, 0x0000fcfc);   /* VFD_CONTROL_2 */
-	OUT_RING(ring, 0xfcfcfcfc);   /* VFD_CONTROL_3 */
-	OUT_RING(ring, 0x000000fc);   /* VFD_CONTROL_4 */
-	OUT_RING(ring, 0x0000fcfc);   /* VFD_CONTROL_5 */
-	OUT_RING(ring, 0x00000000);   /* VFD_CONTROL_6 */
 }
+
+static struct ir3_program_state *
+fd6_program_create(void *data, struct ir3_shader_variant *bs,
+		struct ir3_shader_variant *vs,
+		struct ir3_shader_variant *fs,
+		const struct ir3_shader_key *key)
+{
+	struct fd_context *ctx = data;
+	struct fd6_program_state *state = CALLOC_STRUCT(fd6_program_state);
+
+	state->bs = bs;
+	state->vs = vs;
+	state->fs = fs;
+	state->binning_stateobj = fd_ringbuffer_new_object(ctx->pipe, 0x1000);
+	state->stateobj = fd_ringbuffer_new_object(ctx->pipe, 0x1000);
+
+	setup_stateobj(state->binning_stateobj, state, true);
+	setup_stateobj(state->stateobj, state, false);
+
+	return &state->base;
+}
+
+static void
+fd6_program_destroy(void *data, struct ir3_program_state *state)
+{
+	struct fd6_program_state *so = fd6_program_state(state);
+	fd_ringbuffer_del(so->stateobj);
+	fd_ringbuffer_del(so->binning_stateobj);
+	free(so);
+}
+
+static const struct ir3_cache_funcs cache_funcs = {
+	.create_state = fd6_program_create,
+	.destroy_state = fd6_program_destroy,
+};
 
 void
 fd6_prog_init(struct pipe_context *pctx)
 {
+	struct fd_context *ctx = fd_context(pctx);
+
+	fd6_context(ctx)->shader_cache = ir3_cache_create(&cache_funcs, ctx);
+
 	pctx->create_fs_state = fd6_fp_state_create;
 	pctx->delete_fs_state = fd6_fp_state_delete;
 

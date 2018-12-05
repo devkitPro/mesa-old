@@ -319,8 +319,10 @@ vc4_resource_get_handle(struct pipe_screen *pscreen,
 
                 return vc4_bo_flink(rsc->bo, &whandle->handle);
         case WINSYS_HANDLE_TYPE_KMS:
-                if (screen->ro && renderonly_get_handle(rsc->scanout, whandle))
-                        return TRUE;
+                if (screen->ro) {
+                        assert(rsc->scanout);
+                        return renderonly_get_handle(rsc->scanout, whandle);
+                }
                 whandle->handle = rsc->bo->handle;
                 return TRUE;
         case WINSYS_HANDLE_TYPE_FD:
@@ -572,7 +574,15 @@ vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
                         goto fail;
         }
 
-        if (screen->ro && tmpl->bind & PIPE_BIND_SCANOUT) {
+        /* Set up the "scanout resource" (the dmabuf export of our buffer to
+         * the KMS handle) if the buffer might ever have
+         * resource_get_handle(WINSYS_HANDLE_TYPE_KMS) called on it.
+         * create_with_modifiers() doesn't give us usage flags, so we have to
+         * assume that all calls with modifiers are scanout-possible.
+         */
+        if (screen->ro &&
+            ((tmpl->bind & PIPE_BIND_SCANOUT) ||
+             !(count == 1 && modifiers[0] == DRM_FORMAT_MOD_INVALID))) {
                 rsc->scanout =
                         renderonly_scanout_for_resource(prsc, screen->ro, NULL);
                 if (!rsc->scanout)
@@ -614,12 +624,10 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
 
         switch (whandle->type) {
         case WINSYS_HANDLE_TYPE_SHARED:
-                rsc->bo = vc4_bo_open_name(screen,
-                                           whandle->handle, whandle->stride);
+                rsc->bo = vc4_bo_open_name(screen, whandle->handle);
                 break;
         case WINSYS_HANDLE_TYPE_FD:
-                rsc->bo = vc4_bo_open_dmabuf(screen,
-                                             whandle->handle, whandle->stride);
+                rsc->bo = vc4_bo_open_dmabuf(screen, whandle->handle);
                 break;
         default:
                 fprintf(stderr,
@@ -1129,7 +1137,8 @@ vc4_resource_screen_init(struct pipe_screen *pscreen)
         pscreen->resource_get_handle = vc4_resource_get_handle;
         pscreen->resource_destroy = vc4_resource_destroy;
         pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
-                                                            false, false, true);
+                                                            false, false,
+                                                            false, true);
 
         /* Test if the kernel has GET_TILING; it will return -EINVAL if the
          * ioctl does not exist, but -ENOENT if we pass an impossible handle.

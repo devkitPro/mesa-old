@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -66,7 +64,7 @@
 
 static const struct debug_named_value debug_options[] = {
 		{"msgs",      FD_DBG_MSGS,   "Print debug messages"},
-		{"disasm",    FD_DBG_DISASM, "Dump TGSI and adreno shader disassembly"},
+		{"disasm",    FD_DBG_DISASM, "Dump TGSI and adreno shader disassembly (a2xx only, see IR3_SHADER_DEBUG)"},
 		{"dclear",    FD_DBG_DCLEAR, "Mark all state dirty after clear"},
 		{"ddraw",     FD_DBG_DDRAW,  "Mark all state dirty after draw"},
 		{"noscis",    FD_DBG_NOSCIS, "Disable scissor optimization"},
@@ -74,7 +72,6 @@ static const struct debug_named_value debug_options[] = {
 		{"nobypass",  FD_DBG_NOBYPASS, "Disable GMEM bypass"},
 		{"fraghalf",  FD_DBG_FRAGHALF, "Use half-precision in fragment shader"},
 		{"nobin",     FD_DBG_NOBIN,  "Disable hw binning"},
-		{"optmsgs",   FD_DBG_OPTMSGS,"Enable optimizer debug messages"},
 		{"glsl120",   FD_DBG_GLSL120,"Temporary flag to force GLSL 1.20 (rather than 1.30) on a3xx+"},
 		{"shaderdb",  FD_DBG_SHADERDB, "Enable shaderdb output"},
 		{"flush",     FD_DBG_FLUSH,  "Force flush after every draw"},
@@ -88,6 +85,7 @@ static const struct debug_named_value debug_options[] = {
 		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
 		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
 		{"perfcntrs", FD_DBG_PERFC,  "Expose performance counters"},
+		{"softpin",   FD_DBG_SOFTPIN,"Enable softpin command submission (experimental)"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -96,17 +94,6 @@ DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", debug_options, 0)
 int fd_mesa_debug = 0;
 bool fd_binning_enabled = true;
 static bool glsl120 = false;
-
-static const struct debug_named_value shader_debug_options[] = {
-		{"vs", FD_DBG_SHADER_VS, "Print shader disasm for vertex shaders"},
-		{"fs", FD_DBG_SHADER_FS, "Print shader disasm for fragment shaders"},
-		{"cs", FD_DBG_SHADER_CS, "Print shader disasm for compute shaders"},
-		DEBUG_NAMED_VALUE_END
-};
-
-DEBUG_GET_ONCE_FLAGS_OPTION(fd_shader_debug, "FD_SHADER_DEBUG", shader_debug_options, 0)
-
-enum fd_shader_debug fd_shader_debug = 0;
 
 static const char *
 fd_screen_get_name(struct pipe_screen *pscreen)
@@ -704,7 +691,6 @@ fd_screen_create(struct fd_device *dev)
 	uint64_t val;
 
 	fd_mesa_debug = debug_get_option_fd_mesa_debug();
-	fd_shader_debug = debug_get_option_fd_shader_debug();
 
 	if (fd_mesa_debug & FD_DBG_NOBIN)
 		fd_binning_enabled = false;
@@ -797,6 +783,8 @@ fd_screen_create(struct fd_device *dev)
 	 * send a patch ;-)
 	 */
 	switch (screen->gpu_id) {
+	case 200:
+	case 201:
 	case 205:
 	case 220:
 		fd2_screen_init(pscreen);
@@ -822,7 +810,11 @@ fd_screen_create(struct fd_device *dev)
 		goto fail;
 	}
 
-	if (screen->gpu_id >= 500) {
+	if (screen->gpu_id >= 600) {
+		screen->gmem_alignw = 32;
+		screen->gmem_alignh = 32;
+		screen->num_vsc_pipes = 32;
+	} else if (screen->gpu_id >= 500) {
 		screen->gmem_alignw = 64;
 		screen->gmem_alignh = 32;
 		screen->num_vsc_pipes = 16;

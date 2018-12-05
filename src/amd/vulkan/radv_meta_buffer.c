@@ -15,8 +15,8 @@ build_buffer_fill_shader(struct radv_device *dev)
 	b.shader->info.cs.local_size[1] = 1;
 	b.shader->info.cs.local_size[2] = 1;
 
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -67,8 +67,8 @@ build_buffer_copy_shader(struct radv_device *dev)
 	b.shader->info.cs.local_size[1] = 1;
 	b.shader->info.cs.local_size[2] = 1;
 
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -513,7 +513,7 @@ void radv_CmdUpdateBuffer(
 	if (!dataSize)
 		return;
 
-	if (dataSize < RADV_BUFFER_OPS_CS_THRESHOLD) {
+	if (dataSize < RADV_BUFFER_UPDATE_THRESHOLD) {
 		si_emit_cache_flush(cmd_buffer);
 
 		radv_cs_add_buffer(cmd_buffer->device->ws, cmd_buffer->cs, dst_buffer->bo);

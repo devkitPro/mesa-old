@@ -583,7 +583,7 @@ surface_from_external_memory(VADriverContextP ctx, vlVaSurface *surface,
       whandle.stride = memory_attribute->pitches[i];
       whandle.offset = memory_attribute->offsets[i];
       resources[i] = pscreen->resource_from_handle(pscreen, &res_templ, &whandle,
-                                                   PIPE_HANDLE_USAGE_READ_WRITE);
+                                                   PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
       if (!resources[i]) {
          result = VA_STATUS_ERROR_ALLOCATION_FAILED;
          goto fail;
@@ -598,10 +598,8 @@ surface_from_external_memory(VADriverContextP ctx, vlVaSurface *surface,
    return VA_STATUS_SUCCESS;
 
 fail:
-   for (i = 0; i < VL_NUM_COMPONENTS; i++) {
-      if (resources[i])
-         pscreen->resource_destroy(pscreen, resources[i]);
-   }
+   for (i = 0; i < VL_NUM_COMPONENTS; i++)
+      pipe_resource_reference(&resources[i], NULL);
    return result;
 }
 
@@ -1000,10 +998,8 @@ vlVaExportSurfaceHandle(VADriverContextP ctx,
    surfaces = surf->buffer->get_surfaces(surf->buffer);
 
    usage = 0;
-   if (flags & VA_EXPORT_SURFACE_READ_ONLY)
-      usage |= PIPE_HANDLE_USAGE_READ;
    if (flags & VA_EXPORT_SURFACE_WRITE_ONLY)
-      usage |= PIPE_HANDLE_USAGE_WRITE;
+      usage |= PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE;
 
    desc->fourcc = PipeFormatToVaFourcc(surf->buffer->buffer_format);
    desc->width  = surf->buffer->width;

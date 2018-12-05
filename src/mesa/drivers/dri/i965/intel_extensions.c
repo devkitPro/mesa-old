@@ -113,6 +113,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_texture_snorm = true;
    ctx->Extensions.EXT_texture_sRGB = true;
    ctx->Extensions.EXT_texture_sRGB_decode = true;
+   ctx->Extensions.EXT_texture_sRGB_R8 = true;
    ctx->Extensions.EXT_texture_swizzle = true;
    ctx->Extensions.EXT_texture_type_2_10_10_10_REV = true;
    ctx->Extensions.EXT_vertex_array_bgra = true;
@@ -247,7 +248,6 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
       ctx->Extensions.ARB_fragment_shader_interlock = true;
-      ctx->Extensions.INTEL_fragment_shader_ordering = true;
 
       if (can_do_pipelined_register_writes(brw->screen)) {
          ctx->Extensions.ARB_draw_indirect = true;

@@ -22,6 +22,7 @@
  */
 
 #include "nir.h"
+#include "nir_builder.h"
 #include "util/set.h"
 #include "util/hash_table.h"
 
@@ -92,10 +93,26 @@ tcs_add_output_reads(nir_shader *shader, uint64_t *read, uint64_t *patches_read)
    }
 }
 
-static bool
-remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
-                      uint64_t *used_by_other_stage,
-                      uint64_t *used_by_other_stage_patches)
+/**
+ * Helper for removing unused shader I/O variables, by demoting them to global
+ * variables (which may then by dead code eliminated).
+ *
+ * Example usage is:
+ *
+ * progress = nir_remove_unused_io_vars(producer,
+ *                                      &producer->outputs,
+ *                                      read, patches_read) ||
+ *                                      progress;
+ *
+ * The "used" should be an array of 4 uint64_ts (probably of VARYING_BIT_*)
+ * representing each .location_frac used.  Note that for vector variables,
+ * only the first channel (.location_frac) is examined for deciding if the
+ * variable is used!
+ */
+bool
+nir_remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
+                          uint64_t *used_by_other_stage,
+                          uint64_t *used_by_other_stage_patches)
 {
    bool progress = false;
    uint64_t *used;
@@ -125,6 +142,9 @@ remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
          progress = true;
       }
    }
+
+   if (progress)
+      nir_fixup_deref_modes(shader);
 
    return progress;
 }
@@ -166,19 +186,22 @@ nir_remove_unused_varyings(nir_shader *producer, nir_shader *consumer)
       tcs_add_output_reads(producer, read, patches_read);
 
    bool progress = false;
-   progress = remove_unused_io_vars(producer, &producer->outputs, read,
-                                    patches_read);
+   progress = nir_remove_unused_io_vars(producer, &producer->outputs, read,
+                                        patches_read);
 
-   progress = remove_unused_io_vars(consumer, &consumer->inputs, written,
-                                    patches_written) || progress;
+   progress = nir_remove_unused_io_vars(consumer, &consumer->inputs, written,
+                                        patches_written) || progress;
 
    return progress;
 }
 
 static uint8_t
-get_interp_type(nir_variable *var, bool default_to_smooth_interp)
+get_interp_type(nir_variable *var, const struct glsl_type *type,
+                bool default_to_smooth_interp)
 {
-   if (var->data.interpolation != INTERP_MODE_NONE)
+   if (glsl_type_is_integer(type))
+      return INTERP_MODE_FLAT;
+   else if (var->data.interpolation != INTERP_MODE_NONE)
       return var->data.interpolation;
    else if (default_to_smooth_interp)
       return INTERP_MODE_SMOOTH;
@@ -233,7 +256,7 @@ get_slot_component_masks_and_interp_types(struct exec_list *var_list,
          unsigned comps_slot2 = 0;
          for (unsigned i = 0; i < slots; i++) {
             interp_type[location + i] =
-               get_interp_type(var, default_to_smooth_interp);
+               get_interp_type(var, type, default_to_smooth_interp);
             interp_loc[location + i] = get_interp_loc(var);
 
             if (dual_slot) {
@@ -405,7 +428,7 @@ compact_components(nir_shader *producer, nir_shader *consumer, uint8_t *comps,
             continue;
 
          bool found_new_offset = false;
-         uint8_t interp = get_interp_type(var, default_to_smooth_interp);
+         uint8_t interp = get_interp_type(var, type, default_to_smooth_interp);
          for (; cursor[interp] < 32; cursor[interp]++) {
             uint8_t cursor_used_comps = comps[cursor[interp]];
 
@@ -503,4 +526,146 @@ nir_compact_varyings(nir_shader *producer, nir_shader *consumer,
 
    compact_components(producer, consumer, comps, interp_type, interp_loc,
                       default_to_smooth_interp);
+}
+
+/*
+ * Mark XFB varyings as always_active_io in the consumer so the linking opts
+ * don't touch them.
+ */
+void
+nir_link_xfb_varyings(nir_shader *producer, nir_shader *consumer)
+{
+   nir_variable *input_vars[MAX_VARYING] = { 0 };
+
+   nir_foreach_variable(var, &consumer->inputs) {
+      if (var->data.location >= VARYING_SLOT_VAR0 &&
+          var->data.location - VARYING_SLOT_VAR0 < MAX_VARYING) {
+
+         unsigned location = var->data.location - VARYING_SLOT_VAR0;
+         input_vars[location] = var;
+      }
+   }
+
+   nir_foreach_variable(var, &producer->outputs) {
+      if (var->data.location >= VARYING_SLOT_VAR0 &&
+          var->data.location - VARYING_SLOT_VAR0 < MAX_VARYING) {
+
+         if (!var->data.always_active_io)
+            continue;
+
+         unsigned location = var->data.location - VARYING_SLOT_VAR0;
+         if (input_vars[location]) {
+            input_vars[location]->data.always_active_io = true;
+         }
+      }
+   }
+}
+
+static bool
+try_replace_constant_input(nir_shader *shader,
+                           nir_intrinsic_instr *store_intr)
+{
+   nir_variable *out_var =
+      nir_deref_instr_get_variable(nir_src_as_deref(store_intr->src[0]));
+
+   if (out_var->data.mode != nir_var_shader_out)
+      return false;
+
+   /* Skip types that require more complex handling.
+    * TODO: add support for these types.
+    */
+   if (glsl_type_is_array(out_var->type) ||
+       glsl_type_is_dual_slot(out_var->type) ||
+       glsl_type_is_matrix(out_var->type) ||
+       glsl_type_is_struct(out_var->type))
+      return false;
+
+   /* Limit this pass to scalars for now to keep things simple. Most varyings
+    * should have been lowered to scalars at this point anyway.
+    */
+   if (store_intr->num_components != 1)
+      return false;
+
+   if (out_var->data.location < VARYING_SLOT_VAR0 ||
+       out_var->data.location - VARYING_SLOT_VAR0 >= MAX_VARYING)
+      return false;
+
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+
+   nir_builder b;
+   nir_builder_init(&b, impl);
+
+   bool progress = false;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic != nir_intrinsic_load_deref)
+            continue;
+
+         nir_variable *in_var =
+            nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
+
+         if (in_var->data.mode != nir_var_shader_in)
+            continue;
+
+         if (in_var->data.location != out_var->data.location ||
+             in_var->data.location_frac != out_var->data.location_frac)
+            continue;
+
+         b.cursor = nir_before_instr(instr);
+
+         nir_load_const_instr *out_const =
+            nir_instr_as_load_const(store_intr->src[1].ssa->parent_instr);
+
+         /* Add new const to replace the input */
+         nir_ssa_def *nconst = nir_build_imm(&b, store_intr->num_components,
+                                             intr->dest.ssa.bit_size,
+                                             out_const->value);
+
+         nir_ssa_def_rewrite_uses(&intr->dest.ssa, nir_src_for_ssa(nconst));
+
+         progress = true;
+      }
+   }
+
+   return progress;
+}
+
+bool
+nir_link_constant_varyings(nir_shader *producer, nir_shader *consumer)
+{
+   /* TODO: Add support for more shader stage combinations */
+   if (consumer->info.stage != MESA_SHADER_FRAGMENT ||
+       (producer->info.stage != MESA_SHADER_VERTEX &&
+        producer->info.stage != MESA_SHADER_TESS_EVAL))
+      return false;
+
+   bool progress = false;
+
+   nir_function_impl *impl = nir_shader_get_entrypoint(producer);
+
+   /* If we find a store in the last block of the producer we can be sure this
+    * is the only possible value for this output.
+    */
+   nir_block *last_block = nir_impl_last_block(impl);
+   nir_foreach_instr_reverse(instr, last_block) {
+      if (instr->type != nir_instr_type_intrinsic)
+         continue;
+
+      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+
+      if (intr->intrinsic != nir_intrinsic_store_deref)
+         continue;
+
+      if (intr->src[1].ssa->parent_instr->type != nir_instr_type_load_const) {
+         continue;
+      }
+
+      progress |= try_replace_constant_input(consumer, intr);
+   }
+
+   return progress;
 }

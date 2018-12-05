@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -29,8 +27,8 @@
 #ifndef FREEDRENO_SCREEN_H_
 #define FREEDRENO_SCREEN_H_
 
-#include <freedreno_drmif.h>
-#include <freedreno_ringbuffer.h>
+#include "drm/freedreno_drmif.h"
+#include "drm/freedreno_ringbuffer.h"
 
 #include "pipe/p_screen.h"
 #include "util/u_memory.h"
@@ -97,6 +95,8 @@ struct fd_screen {
 	struct fd_batch_cache batch_cache;
 
 	bool reorder;
+
+	uint16_t rsc_seqno;
 };
 
 static inline struct fd_screen *

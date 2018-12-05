@@ -148,7 +148,8 @@ static void map_msg_fb_it_buf(struct ruvd_decoder *dec)
 	buf = &dec->msg_fb_it_buffers[dec->cur_buffer];
 
 	/* and map it for CPU access */
-	ptr = dec->ws->buffer_map(buf->res->buf, dec->cs, PIPE_TRANSFER_WRITE);
+	ptr = dec->ws->buffer_map(buf->res->buf, dec->cs,
+				  PIPE_TRANSFER_WRITE | RADEON_TRANSFER_TEMPORARY);
 
 	/* calc buffer offsets */
 	dec->msg = (struct ruvd_msg *)ptr;
@@ -964,149 +965,6 @@ static struct ruvd_mpeg4 get_mpeg4_msg(struct ruvd_decoder *dec,
 	return result;
 }
 
-static void get_mjpeg_slice_header(struct ruvd_decoder *dec, struct pipe_mjpeg_picture_desc *pic)
-{
-	int size = 0, saved_size, len_pos, i;
-	uint16_t *bs;
-	uint8_t *buf = dec->bs_ptr;
-
-	/* SOI */
-	buf[size++] = 0xff;
-	buf[size++] = 0xd8;
-
-	/* DQT */
-	buf[size++] = 0xff;
-	buf[size++] = 0xdb;
-
-	len_pos = size++;
-	size++;
-
-	for (i = 0; i < 4; ++i) {
-		if (pic->quantization_table.load_quantiser_table[i] == 0)
-			continue;
-
-		buf[size++] = i;
-		memcpy((buf + size), &pic->quantization_table.quantiser_table[i], 64);
-		size += 64;
-	}
-
-	bs = (uint16_t*)&buf[len_pos];
-	*bs = util_bswap16(size - 4);
-
-	saved_size = size;
-
-	/* DHT */
-	buf[size++] = 0xff;
-	buf[size++] = 0xc4;
-
-	len_pos = size++;
-	size++;
-
-	for (i = 0; i < 2; ++i) {
-		int num = 0, j;
-
-		if (pic->huffman_table.load_huffman_table[i] == 0)
-			continue;
-
-		buf[size++] = 0x00 | i;
-		memcpy((buf + size), &pic->huffman_table.table[i].num_dc_codes, 16);
-		size += 16;
-		for (j = 0; j < 16; ++j)
-			num += pic->huffman_table.table[i].num_dc_codes[j];
-		assert(num <= 12);
-		memcpy((buf + size), &pic->huffman_table.table[i].dc_values, num);
-		size += num;
-	}
-
-	for (i = 0; i < 2; ++i) {
-		int num = 0, j;
-
-		if (pic->huffman_table.load_huffman_table[i] == 0)
-			continue;
-
-		buf[size++] = 0x10 | i;
-		memcpy((buf + size), &pic->huffman_table.table[i].num_ac_codes, 16);
-		size += 16;
-		for (j = 0; j < 16; ++j)
-			num += pic->huffman_table.table[i].num_ac_codes[j];
-		assert(num <= 162);
-		memcpy((buf + size), &pic->huffman_table.table[i].ac_values, num);
-		size += num;
-	}
-
-	bs = (uint16_t*)&buf[len_pos];
-	*bs = util_bswap16(size - saved_size - 2);
-
-	saved_size = size;
-
-	/* DRI */
-	if (pic->slice_parameter.restart_interval) {
-		buf[size++] = 0xff;
-		buf[size++] = 0xdd;
-		buf[size++] = 0x00;
-		buf[size++] = 0x04;
-		bs = (uint16_t*)&buf[size++];
-		*bs = util_bswap16(pic->slice_parameter.restart_interval);
-		saved_size = ++size;
-	}
-
-	/* SOF */
-	buf[size++] = 0xff;
-	buf[size++] = 0xc0;
-
-	len_pos = size++;
-	size++;
-
-	buf[size++] = 0x08;
-
-	bs = (uint16_t*)&buf[size++];
-	*bs = util_bswap16(pic->picture_parameter.picture_height);
-	size++;
-
-	bs = (uint16_t*)&buf[size++];
-	*bs = util_bswap16(pic->picture_parameter.picture_width);
-	size++;
-
-	buf[size++] = pic->picture_parameter.num_components;
-
-	for (i = 0; i < pic->picture_parameter.num_components; ++i) {
-		buf[size++] = pic->picture_parameter.components[i].component_id;
-		buf[size++] = pic->picture_parameter.components[i].h_sampling_factor << 4 |
-			pic->picture_parameter.components[i].v_sampling_factor;
-		buf[size++] = pic->picture_parameter.components[i].quantiser_table_selector;
-	}
-
-	bs = (uint16_t*)&buf[len_pos];
-	*bs = util_bswap16(size - saved_size - 2);
-
-	saved_size = size;
-
-	/* SOS */
-	buf[size++] = 0xff;
-	buf[size++] = 0xda;
-
-	len_pos = size++;
-	size++;
-
-	buf[size++] = pic->slice_parameter.num_components;
-
-	for (i = 0; i < pic->slice_parameter.num_components; ++i) {
-		buf[size++] = pic->slice_parameter.components[i].component_selector;
-		buf[size++] = pic->slice_parameter.components[i].dc_table_selector << 4 |
-			pic->slice_parameter.components[i].ac_table_selector;
-	}
-
-	buf[size++] = 0x00;
-	buf[size++] = 0x3f;
-	buf[size++] = 0x00;
-
-	bs = (uint16_t*)&buf[len_pos];
-	*bs = util_bswap16(size - saved_size - 2);
-
-	dec->bs_ptr += size;
-	dec->bs_size += size;
-}
-
 /**
  * destroy this video decoder
  */
@@ -1158,7 +1016,7 @@ static void ruvd_begin_frame(struct pipe_video_codec *decoder,
 	dec->bs_size = 0;
 	dec->bs_ptr = dec->ws->buffer_map(
 		dec->bs_buffers[dec->cur_buffer].res->buf,
-		dec->cs, PIPE_TRANSFER_WRITE);
+		dec->cs, PIPE_TRANSFER_WRITE | RADEON_TRANSFER_TEMPORARY);
 }
 
 /**
@@ -1185,7 +1043,6 @@ static void ruvd_decode_bitstream(struct pipe_video_codec *decoder,
 				  const unsigned *sizes)
 {
 	struct ruvd_decoder *dec = (struct ruvd_decoder*)decoder;
-	enum pipe_video_format format = u_reduce_video_profile(picture->profile);
 	unsigned i;
 
 	assert(decoder);
@@ -1193,15 +1050,9 @@ static void ruvd_decode_bitstream(struct pipe_video_codec *decoder,
 	if (!dec->bs_ptr)
 		return;
 
-	if (format == PIPE_VIDEO_FORMAT_JPEG)
-		get_mjpeg_slice_header(dec, (struct pipe_mjpeg_picture_desc*)picture);
-
 	for (i = 0; i < num_buffers; ++i) {
 		struct rvid_buffer *buf = &dec->bs_buffers[dec->cur_buffer];
 		unsigned new_size = dec->bs_size + sizes[i];
-
-		if (format == PIPE_VIDEO_FORMAT_JPEG)
-			new_size += 2; /* save for EOI */
 
 		if (new_size > buf->res->buf->size) {
 			dec->ws->buffer_unmap(buf->res->buf);
@@ -1210,8 +1061,9 @@ static void ruvd_decode_bitstream(struct pipe_video_codec *decoder,
 				return;
 			}
 
-			dec->bs_ptr = dec->ws->buffer_map(buf->res->buf, dec->cs,
-							  PIPE_TRANSFER_WRITE);
+			dec->bs_ptr = dec->ws->buffer_map(
+				buf->res->buf, dec->cs,
+				PIPE_TRANSFER_WRITE | RADEON_TRANSFER_TEMPORARY);
 			if (!dec->bs_ptr)
 				return;
 
@@ -1221,13 +1073,6 @@ static void ruvd_decode_bitstream(struct pipe_video_codec *decoder,
 		memcpy(dec->bs_ptr, buffers[i], sizes[i]);
 		dec->bs_size += sizes[i];
 		dec->bs_ptr += sizes[i];
-	}
-
-	if (format == PIPE_VIDEO_FORMAT_JPEG) {
-		((uint8_t *)dec->bs_ptr)[0] = 0xff;	/* EOI */
-		((uint8_t *)dec->bs_ptr)[1] = 0xd9;
-		dec->bs_size += 2;
-		dec->bs_ptr += 2;
 	}
 }
 
@@ -1425,7 +1270,7 @@ struct pipe_video_codec *si_common_uvd_create_decoder(struct pipe_context *conte
 	dec->stream_handle = si_vid_alloc_stream_handle();
 	dec->screen = context->screen;
 	dec->ws = ws;
-	dec->cs = ws->cs_create(sctx->ctx, RING_UVD, NULL, NULL);
+	dec->cs = ws->cs_create(sctx->ctx, RING_UVD, NULL, NULL, false);
 	if (!dec->cs) {
 		RVID_ERR("Can't get command submission context.\n");
 		goto error;

@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -37,6 +35,7 @@
 
 #include "freedreno_resource.h"
 #include "freedreno_batch_cache.h"
+#include "freedreno_fence.h"
 #include "freedreno_screen.h"
 #include "freedreno_surface.h"
 #include "freedreno_context.h"
@@ -100,7 +99,9 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
 {
 	struct fd_screen *screen = fd_screen(rsc->base.screen);
 	uint32_t flags = DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
-			DRM_FREEDRENO_GEM_TYPE_KMEM; /* TODO */
+			DRM_FREEDRENO_GEM_TYPE_KMEM |
+			COND(rsc->base.bind & PIPE_BIND_SCANOUT, DRM_FREEDRENO_GEM_SCANOUT);
+			/* TODO other flags? */
 
 	/* if we start using things other than write-combine,
 	 * be sure to check for PIPE_RESOURCE_FLAG_MAP_COHERENT
@@ -110,6 +111,7 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
 		fd_bo_del(rsc->bo);
 
 	rsc->bo = fd_bo_new(screen->dev, size, flags);
+	rsc->seqno = p_atomic_inc_return(&screen->rsc_seqno);
 	util_range_set_empty(&rsc->valid_buffer_range);
 	fd_bc_invalidate_resource(rsc, true);
 }
@@ -195,6 +197,7 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
 	/* TODO valid_buffer_range?? */
 	swap(rsc->bo,        shadow->bo);
 	swap(rsc->write_batch,   shadow->write_batch);
+	rsc->seqno = p_atomic_inc_return(&ctx->screen->rsc_seqno);
 
 	/* at this point, the newly created shadow buffer is not referenced
 	 * by any batches, but the existing rsc (probably) is.  We need to
@@ -848,7 +851,7 @@ fd_resource_create(struct pipe_screen *pscreen,
 		 (fd_mesa_debug & FD_DBG_LRZ) && has_depth(format)) {
 		const uint32_t flags = DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
 				DRM_FREEDRENO_GEM_TYPE_KMEM; /* TODO */
-		unsigned lrz_pitch  = align(DIV_ROUND_UP(tmpl->width0, 8), 32);
+		unsigned lrz_pitch  = align(DIV_ROUND_UP(tmpl->width0, 8), 64);
 		unsigned lrz_height = DIV_ROUND_UP(tmpl->height0, 8);
 		unsigned size = lrz_pitch * lrz_height * 2;
 
@@ -1070,6 +1073,8 @@ void
 fd_blitter_pipe_begin(struct fd_context *ctx, bool render_cond, bool discard,
 		enum fd_render_stage stage)
 {
+	fd_fence_ref(ctx->base.screen, &ctx->last_fence, NULL);
+
 	util_blitter_save_fragment_constant_buffer_slot(ctx->blitter,
 			ctx->constbuf[PIPE_SHADER_FRAGMENT].cb);
 	util_blitter_save_vertex_buffer_slot(ctx->blitter, ctx->vtx.vertexbuf.vb);
@@ -1085,8 +1090,7 @@ fd_blitter_pipe_begin(struct fd_context *ctx, bool render_cond, bool discard,
 	util_blitter_save_depth_stencil_alpha(ctx->blitter, ctx->zsa);
 	util_blitter_save_stencil_ref(ctx->blitter, &ctx->stencil_ref);
 	util_blitter_save_sample_mask(ctx->blitter, ctx->sample_mask);
-	util_blitter_save_framebuffer(ctx->blitter,
-			ctx->batch ? &ctx->batch->framebuffer : NULL);
+	util_blitter_save_framebuffer(ctx->blitter, &ctx->framebuffer);
 	util_blitter_save_fragment_sampler_states(ctx->blitter,
 			ctx->tex[PIPE_SHADER_FRAGMENT].num_samplers,
 			(void **)ctx->tex[PIPE_SHADER_FRAGMENT].samplers);
@@ -1184,10 +1188,54 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
 	pscreen->resource_destroy = u_transfer_helper_resource_destroy;
 
 	pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
-			true, fake_rgtc, true);
+			true, false, fake_rgtc, true);
 
 	if (!screen->setup_slices)
 		screen->setup_slices = fd_setup_slices;
+}
+
+static void
+fd_get_sample_position(struct pipe_context *context,
+                         unsigned sample_count, unsigned sample_index,
+                         float *pos_out)
+{
+	/* The following is copied from nouveau/nv50 except for position
+	 * values, which are taken from blob driver */
+	static const uint8_t pos1[1][2] = { { 0x8, 0x8 } };
+	static const uint8_t pos2[2][2] = {
+		{ 0xc, 0xc }, { 0x4, 0x4 } };
+	static const uint8_t pos4[4][2] = {
+		{ 0x6, 0x2 }, { 0xe, 0x6 },
+		{ 0x2, 0xa }, { 0xa, 0xe } };
+	/* TODO needs to be verified on supported hw */
+	static const uint8_t pos8[8][2] = {
+		{ 0x9, 0x5 }, { 0x7, 0xb },
+		{ 0xd, 0x9 }, { 0x5, 0x3 },
+		{ 0x3, 0xd }, { 0x1, 0x7 },
+		{ 0xb, 0xf }, { 0xf, 0x1 } };
+
+	const uint8_t (*ptr)[2];
+
+	switch (sample_count) {
+	case 1:
+		ptr = pos1;
+		break;
+	case 2:
+		ptr = pos2;
+		break;
+	case 4:
+		ptr = pos4;
+		break;
+	case 8:
+		ptr = pos8;
+		break;
+	default:
+		assert(0);
+		return;
+	}
+
+	pos_out[0] = ptr[sample_index][0] / 16.0f;
+	pos_out[1] = ptr[sample_index][1] / 16.0f;
 }
 
 void
@@ -1204,4 +1252,5 @@ fd_resource_context_init(struct pipe_context *pctx)
 	pctx->blit = fd_blit;
 	pctx->flush_resource = fd_flush_resource;
 	pctx->invalidate_resource = fd_invalidate_resource;
+	pctx->get_sample_position = fd_get_sample_position;
 }

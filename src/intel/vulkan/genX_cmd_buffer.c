@@ -122,6 +122,18 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
       sba.InstructionBufferSize                 = 0xfffff;
       sba.InstructionBuffersizeModifyEnable     = true;
 #  endif
+#  if (GEN_GEN >= 9)
+      sba.BindlessSurfaceStateBaseAddress = (struct anv_address) { NULL, 0 };
+      sba.BindlessSurfaceStateMemoryObjectControlState = GENX(MOCS);
+      sba.BindlessSurfaceStateBaseAddressModifyEnable = true;
+      sba.BindlessSurfaceStateSize = 0;
+#  endif
+#  if (GEN_GEN >= 10)
+      sba.BindlessSamplerStateBaseAddress = (struct anv_address) { NULL, 0 };
+      sba.BindlessSamplerStateMemoryObjectControlState = GENX(MOCS);
+      sba.BindlessSamplerStateBaseAddressModifyEnable = true;
+      sba.BindlessSamplerStateBufferSize = 0;
+#  endif
    }
 
    /* After re-setting the surface state base address, we have to do some
@@ -1605,6 +1617,14 @@ genX(cmd_buffer_config_l3)(struct anv_cmd_buffer *cmd_buffer,
    uint32_t l3cr;
    anv_pack_struct(&l3cr, GENX(L3CNTLREG),
                    .SLMEnable = has_slm,
+#if GEN_GEN == 11
+   /* WA_1406697149: Bit 9 "Error Detection Behavior Control" must be set
+    * in L3CNTLREG register. The default setting of the bit is not the
+    * desirable behavior.
+   */
+                   .ErrorDetectionBehaviorControl = true,
+                   .UseFullWays = true,
+#endif
                    .URBAllocation = cfg->n[GEN_L3P_URB],
                    .ROAllocation = cfg->n[GEN_L3P_RO],
                    .DCAllocation = cfg->n[GEN_L3P_DC],
@@ -1745,6 +1765,12 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
                        ANV_PIPE_STALL_AT_SCOREBOARD_BIT)))
             pipe.StallAtPixelScoreboard = true;
       }
+
+      /* If a render target flush was emitted, then we can toggle off the bit
+       * saying that render target writes are ongoing.
+       */
+      if (bits & ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT)
+         bits &= ~(ANV_PIPE_RENDER_TARGET_WRITES);
 
       bits &= ~(ANV_PIPE_FLUSH_BITS | ANV_PIPE_CS_STALL_BIT);
    }
@@ -2546,12 +2572,11 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
          struct GENX(VERTEX_BUFFER_STATE) state = {
             .VertexBufferIndex = vb,
 
-#if GEN_GEN >= 8
-            .MemoryObjectControlState = GENX(MOCS),
-#else
+            .VertexBufferMOCS = anv_mocs_for_bo(cmd_buffer->device,
+                                                buffer->address.bo),
+#if GEN_GEN <= 7
             .BufferAccessType = pipeline->vb[vb].instanced ? INSTANCEDATA : VERTEXDATA,
             .InstanceDataStepRate = pipeline->vb[vb].instance_divisor,
-            .VertexBufferMemoryObjectControlState = GENX(MOCS),
 #endif
 
             .AddressModifyEnable = true,
@@ -2666,12 +2691,11 @@ emit_vertex_bo(struct anv_cmd_buffer *cmd_buffer,
          .VertexBufferIndex = index,
          .AddressModifyEnable = true,
          .BufferPitch = 0,
+         .VertexBufferMOCS = anv_mocs_for_bo(cmd_buffer->device, addr.bo),
 #if (GEN_GEN >= 8)
-         .MemoryObjectControlState = GENX(MOCS),
          .BufferStartingAddress = addr,
          .BufferSize = size
 #else
-         .VertexBufferMemoryObjectControlState = GENX(MOCS),
          .BufferStartingAddress = addr,
          .EndAddress = anv_address_add(addr, size),
 #endif
@@ -2759,6 +2783,8 @@ void genX(CmdDraw)(
       prim.StartInstanceLocation    = firstInstance;
       prim.BaseVertexLocation       = 0;
    }
+
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_WRITES;
 }
 
 void genX(CmdDrawIndexed)(
@@ -2798,6 +2824,8 @@ void genX(CmdDrawIndexed)(
       prim.StartInstanceLocation    = firstInstance;
       prim.BaseVertexLocation       = vertexOffset;
    }
+
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_WRITES;
 }
 
 /* Auto-Draw / Indirect Registers */
@@ -2931,6 +2959,8 @@ void genX(CmdDrawIndirect)(
 
       offset += stride;
    }
+
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_WRITES;
 }
 
 void genX(CmdDrawIndexedIndirect)(
@@ -2970,6 +3000,8 @@ void genX(CmdDrawIndexedIndirect)(
 
       offset += stride;
    }
+
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_WRITES;
 }
 
 static VkResult
@@ -3423,9 +3455,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    if (dw == NULL)
       return;
 
-   struct isl_depth_stencil_hiz_emit_info info = {
-      .mocs = device->default_mocs,
-   };
+   struct isl_depth_stencil_hiz_emit_info info = { };
 
    if (iview)
       info.view = &iview->planes[0].isl;
@@ -3443,6 +3473,8 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
                               image->planes[depth_plane].address.bo,
                               image->planes[depth_plane].address.offset +
                               surface->offset);
+      info.mocs =
+         anv_mocs_for_bo(device, image->planes[depth_plane].address.bo);
 
       const uint32_t ds =
          cmd_buffer->state.subpass->depth_stencil_attachment->attachment;
@@ -3474,6 +3506,8 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
                               image->planes[stencil_plane].address.bo,
                               image->planes[stencil_plane].address.offset +
                               surface->offset);
+      info.mocs =
+         anv_mocs_for_bo(device, image->planes[stencil_plane].address.bo);
    }
 
    isl_emit_depth_stencil_hiz_s(&device->isl_dev, dw, &info);

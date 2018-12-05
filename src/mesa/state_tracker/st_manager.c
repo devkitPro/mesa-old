@@ -800,6 +800,17 @@ st_start_thread(struct st_context_iface *stctxi)
    struct st_context *st = (struct st_context *) stctxi;
 
    _mesa_glthread_init(st->ctx);
+
+   /* Pin all driver threads to one L3 cache for optimal performance
+    * on AMD Zen. This is only done if glthread is enabled.
+    *
+    * If glthread is disabled, st_draw.c re-pins driver threads regularly
+    * based on the location of the app thread.
+    */
+   struct glthread_state *glthread = st->ctx->GLThread;
+   if (glthread && st->pipe->set_context_param) {
+      util_pin_driver_threads_to_random_L3(st->pipe, &glthread->queue.threads[0]);
+   }
 }
 
 
@@ -887,6 +898,9 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
       ctx_flags |= PIPE_CONTEXT_LOW_PRIORITY;
    else if (attribs->flags & ST_CONTEXT_FLAG_HIGH_PRIORITY)
       ctx_flags |= PIPE_CONTEXT_HIGH_PRIORITY;
+
+   if (attribs->flags & ST_CONTEXT_FLAG_RESET_NOTIFICATION_ENABLED)
+      ctx_flags |= PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET;
 
    pipe = smapi->screen->context_create(smapi->screen, NULL, ctx_flags);
    if (!pipe) {
@@ -1030,8 +1044,6 @@ st_api_make_current(struct st_api *stapi, struct st_context_iface *stctxi,
    struct st_framebuffer *stdraw, *stread;
    boolean ret;
 
-   _glapi_check_multithread();
-
    if (st) {
       /* reuse or create the draw fb */
       stdraw = st_framebuffer_reuse_or_create(st,
@@ -1071,15 +1083,6 @@ st_api_make_current(struct st_api *stapi, struct st_context_iface *stctxi,
        * of the referenced drawables no longer exist.
        */
       st_framebuffers_purge(st);
-
-      /* Notify the driver that the context thread may have been changed.
-       * This should pin all driver threads to a specific L3 cache for optimal
-       * performance on AMD Zen CPUs.
-       */
-      struct glthread_state *glthread = st->ctx->GLThread;
-      thrd_t *upper_thread = glthread ? &glthread->queue.threads[0] : NULL;
-
-      util_context_thread_changed(st->pipe, upper_thread);
    }
    else {
       ret = _mesa_make_current(NULL, NULL, NULL);

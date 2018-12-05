@@ -119,9 +119,6 @@ _mesa_unpack_format_to_base_format(GLenum format);
 extern GLboolean
 _mesa_base_format_has_channel(GLenum base_format, GLenum pname);
 
-extern GLint
-_mesa_base_format_component_count(GLenum base_format);
-
 extern GLenum
 _mesa_generic_compressed_format_to_uncompressed_format(GLenum format);
 
@@ -141,9 +138,9 @@ _mesa_es_error_check_format_and_type(const struct gl_context *ctx,
                                      unsigned dimensions);
 
 extern GLenum
-_mesa_es3_error_check_format_and_type(const struct gl_context *ctx,
-                                      GLenum format, GLenum type,
-                                      GLenum internalFormat);
+_mesa_gles_error_check_format_and_type(const struct gl_context *ctx,
+                                       GLenum format, GLenum type,
+                                       GLenum internalFormat);
 extern GLint
 _mesa_base_tex_format(const struct gl_context *ctx, GLint internalFormat );
 

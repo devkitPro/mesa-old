@@ -43,8 +43,7 @@ pre_args = [
   '-D__STDC_CONSTANT_MACROS',
   '-D__STDC_FORMAT_MACROS',
   '-D__STDC_LIMIT_MACROS',
-  '-DVERSION="@0@"'.format(meson.project_version()),
-  '-DPACKAGE_VERSION=VERSION',
+  '-DPACKAGE_VERSION="@0@"'.format(meson.project_version()),
   '-DPACKAGE_BUGREPORT="https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa"',
 ]
 
@@ -306,7 +305,10 @@ endif
 
 _egl = get_option('egl')
 if _egl == 'auto'
-  with_egl = with_dri and with_shared_glapi and with_platforms
+  with_egl = (
+    not ['darwin', 'windows'].contains(host_machine.system()) and
+    with_dri and with_shared_glapi and with_platforms
+  )
 elif _egl == 'true'
   if not with_dri
     error('EGL requires dri')
@@ -316,6 +318,8 @@ elif _egl == 'true'
     error('No platforms specified, consider -Dplatforms=drm,x11,surfaceless at least')
   elif not ['disabled', 'dri'].contains(with_glx)
     error('EGL requires dri, but a GLX is being built without dri')
+  elif ['darwin', 'windows'].contains(host_machine.system())
+    error('EGL is not available on Windows or MacOS')
   endif
   with_egl = true
 else
@@ -782,8 +786,9 @@ endif
 
 # Check for generic C arguments
 c_args = []
-foreach a : ['-Wall', '-Werror=implicit-function-declaration',
-             '-Werror=missing-prototypes', '-fno-math-errno',
+foreach a : ['-Werror=implicit-function-declaration',
+             '-Werror=missing-prototypes', '-Werror=return-type',
+             '-fno-math-errno',
              '-fno-trapping-math', '-Qunused-arguments']
   if cc.has_argument(a)
     c_args += a
@@ -803,7 +808,8 @@ endif
 
 # Check for generic C++ arguments
 cpp_args = []
-foreach a : ['-Wall', '-fno-math-errno', '-fno-trapping-math',
+foreach a : ['-Werror=return-type',
+             '-fno-math-errno', '-fno-trapping-math',
              '-Qunused-arguments']
   if cpp.has_argument(a)
     cpp_args += a
@@ -898,8 +904,9 @@ if not cc.links('''#include <stdint.h>
                    int main() {
                      return __sync_add_and_fetch(&v, (uint64_t)1);
                    }''',
+                dependencies : dep_atomic,
                 name : 'GCC 64bit atomics')
-  pre_args += '-DMISSING_64_BIT_ATOMICS'
+  pre_args += '-DMISSING_64BIT_ATOMICS'
 endif
 
 # TODO: shared/static? Is this even worth doing?
@@ -910,7 +917,7 @@ endif
 # case of cross compiling where we can use asm, and that's x86_64 -> x86 when
 # host OS == build OS, since in that case the build machine can run the host's
 # binaries.
-if meson.is_cross_build() 
+if with_asm and meson.is_cross_build()
   if build_machine.system() != host_machine.system()
     # TODO: It may be possible to do this with an exe_wrapper (like wine).
     message('Cross compiling from one OS to another, disabling assembly.')
@@ -1079,14 +1086,6 @@ if dep_thread.found() and host_machine.system() != 'windows'
     pre_args += '-DHAVE_PTHREAD_SETAFFINITY'
   endif
 endif
-if with_amd_vk or with_gallium_radeonsi or with_gallium_r600 or with_gallium_opencl
-  dep_elf = dependency('libelf', required : false)
-  if not dep_elf.found()
-    dep_elf = cc.find_library('elf')
-  endif
-else
-  dep_elf = null_dep
-endif
 dep_expat = dependency('expat')
 # this only exists on linux so either this is linux and it will be found, or
 # its not linux and and wont
@@ -1100,14 +1099,12 @@ dep_libdrm_amdgpu = null_dep
 dep_libdrm_radeon = null_dep
 dep_libdrm_nouveau = null_dep
 dep_libdrm_etnaviv = null_dep
-dep_libdrm_freedreno = null_dep
 dep_libdrm_intel = null_dep
 
-_drm_amdgpu_ver = '2.4.93'
+_drm_amdgpu_ver = '2.4.95'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.66'
 _drm_etnaviv_ver = '2.4.89'
-_drm_freedreno_ver = '2.4.93'
 _drm_intel_ver = '2.4.75'
 _drm_ver = '2.4.75'
 
@@ -1118,7 +1115,6 @@ _libdrm_checks = [
               with_gallium_r300 or with_gallium_r600)],
   ['nouveau', (with_gallium_nouveau or with_dri_nouveau)],
   ['etnaviv', with_gallium_etnaviv],
-  ['freedreno', with_gallium_freedreno],
 ]
 
 # VC4 only needs core libdrm support of this version, not a libdrm_vc4
@@ -1176,7 +1172,7 @@ if with_gallium_opencl
     'all-targets', 'linker', 'coverage', 'instrumentation', 'ipo', 'irreader',
     'lto', 'option', 'objcarcopts', 'profiledata',
   ]
-  llvm_optional_modules += ['coroutines', 'opencl']
+  llvm_optional_modules += ['coroutines']
 endif
 
 if with_amd_vk or with_gallium_radeonsi
@@ -1231,6 +1227,16 @@ if with_llvm
   endif
 elif with_amd_vk or with_gallium_radeonsi or with_gallium_swr
   error('The following drivers require LLVM: Radv, RadeonSI, SWR. One of these is enabled, but LLVM is disabled.')
+endif
+
+if (with_amd_vk or with_gallium_radeonsi or with_gallium_opencl or
+    (with_gallium_r600 and with_llvm))
+  dep_elf = dependency('libelf', required : false)
+  if not dep_elf.found()
+    dep_elf = cc.find_library('elf')
+  endif
+else
+  dep_elf = null_dep
 endif
 
 dep_glvnd = null_dep
@@ -1311,13 +1317,6 @@ if with_platform_wayland
     'linux-dmabuf', 'linux-dmabuf-unstable-v1.xml'
   )
   pre_args += ['-DHAVE_WAYLAND_PLATFORM', '-DWL_HIDE_DEPRECATED']
-else
-  prog_wl_scanner = []
-  wl_scanner_arg = ''
-  dep_wl_protocols = null_dep
-  dep_wayland_client = null_dep
-  dep_wayland_server = null_dep
-  wayland_dmabuf_xml = ''
 endif
 
 dep_x11 = null_dep
@@ -1350,7 +1349,7 @@ if with_platform_x11
     dep_xdamage = dependency('xdamage', version : '>= 1.1')
     dep_xfixes = dependency('xfixes')
     dep_xcb_glx = dependency('xcb-glx', version : '>= 1.8.1')
-    dep_xxf86vm = dependency('xxf86vm', required : false)
+    dep_xxf86vm = dependency('xxf86vm')
   endif
   if (with_any_vk or with_glx == 'dri' or
        (with_gallium_vdpau or with_gallium_xvmc or with_gallium_va or
@@ -1428,12 +1427,10 @@ elif with_glx == 'dri'
   if with_dri_platform == 'drm'
     gl_priv_reqs += 'xcb-dri2 >= 1.8'
   endif
+  gl_priv_reqs += 'xxf86vm'
 endif
 if dep_libdrm.found()
   gl_priv_reqs += 'libdrm >= 2.4.75'
-endif
-if dep_xxf86vm.found()
-  gl_priv_reqs += 'xxf86vm'
 endif
 
 gl_priv_libs = []

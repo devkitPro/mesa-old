@@ -40,31 +40,80 @@
 #include "fd6_format.h"
 #include "fd6_zsa.h"
 
+/* some bits in common w/ a4xx: */
+#include "a4xx/fd4_draw.h"
 
 static void
-draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		struct fd6_emit *emit, unsigned index_offset)
+draw_emit_indirect(struct fd_batch *batch, struct fd_ringbuffer *ring,
+				   enum pc_di_primtype primtype,
+				   const struct pipe_draw_info *info,
+				   unsigned index_offset)
 {
-	const struct pipe_draw_info *info = emit->info;
-	enum pc_di_primtype primtype = ctx->primtypes[info->mode];
+	struct fd_resource *ind = fd_resource(info->indirect->buffer);
 
-	fd6_emit_state(ctx, ring, emit);
+	if (info->index_size) {
+		struct pipe_resource *idx = info->index.resource;
+		unsigned max_indicies = (idx->width0 - info->indirect->offset) /
+			info->index_size;
 
-	if (emit->dirty & (FD_DIRTY_VTXBUF | FD_DIRTY_VTXSTATE))
-		fd6_emit_vertex_bufs(ring, emit);
+		OUT_PKT7(ring, CP_DRAW_INDX_INDIRECT, 6);
+		OUT_RINGP(ring, DRAW4(primtype, DI_SRC_SEL_DMA,
+							  fd4_size2indextype(info->index_size), 0),
+				  &batch->draw_patches);
+		OUT_RELOC(ring, fd_resource(idx)->bo,
+				  index_offset, 0, 0);
+		// XXX: Check A5xx vs A6xx
+		OUT_RING(ring, A5XX_CP_DRAW_INDX_INDIRECT_3_MAX_INDICES(max_indicies));
+		OUT_RELOC(ring, ind->bo, info->indirect->offset, 0, 0);
+	} else {
+		OUT_PKT7(ring, CP_DRAW_INDIRECT, 3);
+		OUT_RINGP(ring, DRAW4(primtype, DI_SRC_SEL_AUTO_INDEX, 0, 0),
+				  &batch->draw_patches);
+		OUT_RELOC(ring, ind->bo, info->indirect->offset, 0, 0);
+	}
+}
 
-	OUT_PKT4(ring, REG_A6XX_VFD_INDEX_OFFSET, 2);
-	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
-	OUT_RING(ring, info->start_instance);   /* VFD_INSTANCE_START_OFFSET */
+static void
+draw_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		  enum pc_di_primtype primtype,
+		  const struct pipe_draw_info *info,
+		  unsigned index_offset)
+{
+	if (info->index_size) {
+		assert(!info->has_user_indices);
 
-	OUT_PKT4(ring, REG_A6XX_PC_RESTART_INDEX, 1);
-	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
-			info->restart_index : 0xffffffff);
+		struct pipe_resource *idx_buffer = info->index.resource;
+		uint32_t idx_size = info->index_size * info->count;
+		uint32_t idx_offset = index_offset + info->start * info->index_size;
 
-	fd6_emit_render_cntl(ctx, false, emit->key.binning_pass);
-	fd6_draw_emit(ctx->batch, ring, primtype,
-			emit->key.binning_pass ? IGNORE_VISIBILITY : USE_VISIBILITY,
-			info, index_offset);
+		/* leave vis mode blank for now, it will be patched up when
+		 * we know if we are binning or not
+		 */
+		uint32_t draw = CP_DRAW_INDX_OFFSET_0_PRIM_TYPE(primtype) |
+			CP_DRAW_INDX_OFFSET_0_SOURCE_SELECT(DI_SRC_SEL_DMA) |
+			CP_DRAW_INDX_OFFSET_0_INDEX_SIZE(fd4_size2indextype(info->index_size)) |
+			0x2000;
+
+		OUT_PKT7(ring, CP_DRAW_INDX_OFFSET, 7);
+		OUT_RINGP(ring, draw, &batch->draw_patches);
+		OUT_RING(ring, info->instance_count);    /* NumInstances */
+		OUT_RING(ring, info->count);             /* NumIndices */
+		OUT_RING(ring, 0x0);           /* XXX */
+		OUT_RELOC(ring, fd_resource(idx_buffer)->bo, idx_offset, 0, 0);
+		OUT_RING (ring, idx_size);
+	} else {
+		/* leave vis mode blank for now, it will be patched up when
+		 * we know if we are binning or not
+		 */
+		uint32_t draw = CP_DRAW_INDX_OFFSET_0_PRIM_TYPE(primtype) |
+			CP_DRAW_INDX_OFFSET_0_SOURCE_SELECT(DI_SRC_SEL_AUTO_INDEX) |
+			0x2000;
+
+		OUT_PKT7(ring, CP_DRAW_INDX_OFFSET, 3);
+		OUT_RINGP(ring, draw, &batch->draw_patches);
+		OUT_RING(ring, info->instance_count);    /* NumInstances */
+		OUT_RING(ring, info->count);             /* NumIndices */
+	}
 }
 
 /* fixup dirty shader state in case some "unrelated" (from the state-
@@ -98,41 +147,52 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 {
 	struct fd6_context *fd6_ctx = fd6_context(ctx);
 	struct fd6_emit emit = {
-		.debug = &ctx->debug,
+		.ctx = ctx,
 		.vtx  = &ctx->vtx,
-		.prog = &ctx->prog,
 		.info = info,
 		.key = {
-			.color_two_side = ctx->rasterizer->light_twoside,
-			.vclamp_color = ctx->rasterizer->clamp_vertex_color,
-			.fclamp_color = ctx->rasterizer->clamp_fragment_color,
-			.rasterflat = ctx->rasterizer->flatshade,
-			.half_precision = ctx->in_blit &&
-					fd_half_precision(&ctx->batch->framebuffer),
-			.ucp_enables = ctx->rasterizer->clip_plane_enable,
-			.has_per_samp = (fd6_ctx->fsaturate || fd6_ctx->vsaturate ||
-					fd6_ctx->fastc_srgb || fd6_ctx->vastc_srgb),
-			.vsaturate_s = fd6_ctx->vsaturate_s,
-			.vsaturate_t = fd6_ctx->vsaturate_t,
-			.vsaturate_r = fd6_ctx->vsaturate_r,
-			.fsaturate_s = fd6_ctx->fsaturate_s,
-			.fsaturate_t = fd6_ctx->fsaturate_t,
-			.fsaturate_r = fd6_ctx->fsaturate_r,
-			.vastc_srgb = fd6_ctx->vastc_srgb,
-			.fastc_srgb = fd6_ctx->fastc_srgb,
-			.vsamples = ctx->tex[PIPE_SHADER_VERTEX].samples,
-			.fsamples = ctx->tex[PIPE_SHADER_FRAGMENT].samples,
+			.vs = ctx->prog.vp,
+			.fs = ctx->prog.fp,
+			.key = {
+				.color_two_side = ctx->rasterizer->light_twoside,
+				.vclamp_color = ctx->rasterizer->clamp_vertex_color,
+				.fclamp_color = ctx->rasterizer->clamp_fragment_color,
+				.rasterflat = ctx->rasterizer->flatshade,
+				.ucp_enables = ctx->rasterizer->clip_plane_enable,
+				.has_per_samp = (fd6_ctx->fsaturate || fd6_ctx->vsaturate ||
+						fd6_ctx->fastc_srgb || fd6_ctx->vastc_srgb),
+				.vsaturate_s = fd6_ctx->vsaturate_s,
+				.vsaturate_t = fd6_ctx->vsaturate_t,
+				.vsaturate_r = fd6_ctx->vsaturate_r,
+				.fsaturate_s = fd6_ctx->fsaturate_s,
+				.fsaturate_t = fd6_ctx->fsaturate_t,
+				.fsaturate_r = fd6_ctx->fsaturate_r,
+				.vastc_srgb = fd6_ctx->vastc_srgb,
+				.fastc_srgb = fd6_ctx->fastc_srgb,
+				.vsamples = ctx->tex[PIPE_SHADER_VERTEX].samples,
+				.fsamples = ctx->tex[PIPE_SHADER_FRAGMENT].samples,
+			}
 		},
 		.rasterflat = ctx->rasterizer->flatshade,
 		.sprite_coord_enable = ctx->rasterizer->sprite_coord_enable,
 		.sprite_coord_mode = ctx->rasterizer->sprite_coord_mode,
 	};
 
-	fixup_shader_state(ctx, &emit.key);
+	fixup_shader_state(ctx, &emit.key.key);
 
-	unsigned dirty = ctx->dirty;
-	const struct ir3_shader_variant *vp = fd6_emit_get_vp(&emit);
-	const struct ir3_shader_variant *fp = fd6_emit_get_fp(&emit);
+	if (!(ctx->dirty & FD_DIRTY_PROG)) {
+		emit.prog = fd6_ctx->prog;
+	} else {
+		fd6_ctx->prog = fd6_emit_get_prog(&emit);
+	}
+
+	emit.dirty = ctx->dirty;      /* *after* fixup_shader_state() */
+	emit.bs = fd6_emit_get_prog(&emit)->bs;
+	emit.vs = fd6_emit_get_prog(&emit)->vs;
+	emit.fs = fd6_emit_get_prog(&emit)->fs;
+
+	const struct ir3_shader_variant *vp = emit.vs;
+	const struct ir3_shader_variant *fp = emit.fs;
 
 	/* do regular pass first, since that is more likely to fail compiling: */
 
@@ -147,25 +207,44 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	 */
 	emit.no_lrz_write = fp->writes_pos || fp->has_kill;
 
-	emit.key.binning_pass = false;
-	emit.dirty = dirty;
+	struct fd_ringbuffer *ring = ctx->batch->draw;
+	enum pc_di_primtype primtype = ctx->primtypes[info->mode];
 
-	draw_impl(ctx, ctx->batch->draw, &emit, index_offset);
+	fd6_emit_state(ring, &emit);
 
-	/* and now binning pass: */
-	emit.key.binning_pass = true;
-	emit.dirty = dirty & ~(FD_DIRTY_BLEND);
-	emit.vp = NULL;   /* we changed key so need to refetch vp */
-	emit.fp = NULL;
-	draw_impl(ctx, ctx->batch->binning, &emit, index_offset);
+	OUT_PKT4(ring, REG_A6XX_VFD_INDEX_OFFSET, 2);
+	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
+	OUT_RING(ring, info->start_instance);   /* VFD_INSTANCE_START_OFFSET */
+
+	OUT_PKT4(ring, REG_A6XX_PC_RESTART_INDEX, 1);
+	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
+			info->restart_index : 0xffffffff);
+
+	/* for debug after a lock up, write a unique counter value
+	 * to scratch7 for each draw, to make it easier to match up
+	 * register dumps to cmdstream.  The combination of IB
+	 * (scratch6) and DRAW is enough to "triangulate" the
+	 * particular draw that caused lockup.
+	 */
+	emit_marker6(ring, 7);
+
+	if (info->indirect) {
+		draw_emit_indirect(ctx->batch, ring, primtype,
+						   info, index_offset);
+	} else {
+		draw_emit(ctx->batch, ring, primtype,
+				  info, index_offset);
+	}
+
+	emit_marker6(ring, 7);
+	fd_reset_wfi(ctx->batch);
 
 	if (emit.streamout_mask) {
 		struct fd_ringbuffer *ring = ctx->batch->draw;
 
 		for (unsigned i = 0; i < PIPE_MAX_SO_BUFFERS; i++) {
 			if (emit.streamout_mask & (1 << i)) {
-				OUT_PKT7(ring, CP_EVENT_WRITE, 1);
-				OUT_RING(ring, FLUSH_SO_0 + i);
+				fd6_event_write(ctx->batch, ring, FLUSH_SO_0 + i, false);
 			}
 		}
 	}
@@ -173,6 +252,123 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	fd_context_all_clean(ctx);
 
 	return true;
+}
+
+static void
+fd6_clear_lrz(struct fd_batch *batch, struct fd_resource *zsbuf, double depth)
+{
+	struct fd_ringbuffer *ring;
+
+	// TODO mid-frame clears (ie. app doing crazy stuff)??  Maybe worth
+	// splitting both clear and lrz clear out into their own rb's.  And
+	// just throw away any draws prior to clear.  (Anything not fullscreen
+	// clear, just fallback to generic path that treats it as a normal
+	// draw
+
+	if (!batch->lrz_clear) {
+		batch->lrz_clear = fd_submit_new_ringbuffer(batch->submit, 0x1000, 0);
+	}
+
+	ring = batch->lrz_clear;
+
+	emit_marker6(ring, 7);
+	OUT_PKT7(ring, CP_SET_MARKER, 1);
+	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(RM6_BYPASS));
+	emit_marker6(ring, 7);
+
+	OUT_PKT4(ring, REG_A6XX_RB_CCU_CNTL, 1);
+	OUT_RING(ring, 0x10000000);
+
+	OUT_PKT4(ring, REG_A6XX_HLSQ_UPDATE_CNTL, 1);
+	OUT_RING(ring, 0x7ffff);
+
+	emit_marker6(ring, 7);
+	OUT_PKT7(ring, CP_SET_MARKER, 1);
+	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(0xc));
+	emit_marker6(ring, 7);
+
+	OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8C01, 1);
+	OUT_RING(ring, 0x0);
+
+	OUT_PKT4(ring, REG_A6XX_SP_PS_2D_SRC_INFO, 13);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
+	OUT_PKT4(ring, REG_A6XX_SP_UNKNOWN_ACC0, 1);
+	OUT_RING(ring, 0x0000f410);
+
+	OUT_PKT4(ring, REG_A6XX_GRAS_2D_BLIT_CNTL, 1);
+	OUT_RING(ring, A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT(RB6_R16_UNORM) |
+			0x4f00080);
+
+	OUT_PKT4(ring, REG_A6XX_RB_2D_BLIT_CNTL, 1);
+	OUT_RING(ring, A6XX_RB_2D_BLIT_CNTL_COLOR_FORMAT(RB6_R16_UNORM) |
+			0x4f00080);
+
+	fd6_event_write(batch, ring, UNK_1D, true);
+	fd6_event_write(batch, ring, PC_CCU_INVALIDATE_COLOR, false);
+
+	OUT_PKT4(ring, REG_A6XX_RB_2D_SRC_SOLID_C0, 4);
+	OUT_RING(ring, fui(depth));
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
+	OUT_PKT4(ring, REG_A6XX_RB_2D_DST_INFO, 9);
+	OUT_RING(ring, A6XX_RB_2D_DST_INFO_COLOR_FORMAT(RB6_R16_UNORM) |
+			A6XX_RB_2D_DST_INFO_TILE_MODE(TILE6_LINEAR) |
+			A6XX_RB_2D_DST_INFO_COLOR_SWAP(WZYX));
+	OUT_RELOCW(ring, zsbuf->lrz, 0, 0, 0);
+	OUT_RING(ring, A6XX_RB_2D_DST_SIZE_PITCH(zsbuf->lrz_pitch * 2));
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
+	OUT_PKT4(ring, REG_A6XX_GRAS_2D_SRC_TL_X, 4);
+	OUT_RING(ring, A6XX_GRAS_2D_SRC_TL_X_X(0));
+	OUT_RING(ring, A6XX_GRAS_2D_SRC_BR_X_X(0));
+	OUT_RING(ring, A6XX_GRAS_2D_SRC_TL_Y_Y(0));
+	OUT_RING(ring, A6XX_GRAS_2D_SRC_BR_Y_Y(0));
+
+	OUT_PKT4(ring, REG_A6XX_GRAS_2D_DST_TL, 2);
+	OUT_RING(ring, A6XX_GRAS_2D_DST_TL_X(0) |
+			A6XX_GRAS_2D_DST_TL_Y(0));
+	OUT_RING(ring, A6XX_GRAS_2D_DST_BR_X(zsbuf->lrz_width - 1) |
+			A6XX_GRAS_2D_DST_BR_Y(zsbuf->lrz_height - 1));
+
+	fd6_event_write(batch, ring, 0x3f, false);
+
+	OUT_WFI5(ring);
+
+	OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
+	OUT_RING(ring, 0x1000000);
+
+	OUT_PKT7(ring, CP_BLIT, 1);
+	OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_SCALE));
+
+	OUT_WFI5(ring);
+
+	OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
+	OUT_RING(ring, 0x0);
+
+	fd6_event_write(batch, ring, UNK_1D, true);
+	fd6_event_write(batch, ring, FACENESS_FLUSH, true);
+	fd6_event_write(batch, ring, CACHE_FLUSH_TS, true);
+
+	fd6_cache_flush(batch, ring);
 }
 
 static bool is_z32(enum pipe_format format)
@@ -187,297 +383,37 @@ static bool is_z32(enum pipe_format format)
 	}
 }
 
-#if 0
-static void
-fd6_clear_lrz(struct fd_batch *batch, struct fd_resource *zsbuf, double depth)
-{
-	struct fd_ringbuffer *ring;
-	uint32_t clear = util_pack_z(PIPE_FORMAT_Z16_UNORM, depth);
-
-	// TODO mid-frame clears (ie. app doing crazy stuff)??  Maybe worth
-	// splitting both clear and lrz clear out into their own rb's.  And
-	// just throw away any draws prior to clear.  (Anything not fullscreen
-	// clear, just fallback to generic path that treats it as a normal
-	// draw
-
-	if (!batch->lrz_clear) {
-		batch->lrz_clear = fd_ringbuffer_new(batch->ctx->pipe, 0x1000);
-		fd_ringbuffer_set_parent(batch->lrz_clear, batch->gmem);
-	}
-
-	ring = batch->lrz_clear;
-
-	OUT_WFI5(ring);
-
-	OUT_PKT4(ring, REG_A6XX_RB_CCU_CNTL, 1);
-	OUT_RING(ring, 0x10000000);
-
-	OUT_PKT4(ring, REG_A6XX_HLSQ_UPDATE_CNTL, 1);
-	OUT_RING(ring, 0x20fffff);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_SU_CNTL, 1);
-	OUT_RING(ring, A6XX_GRAS_SU_CNTL_LINEHALFWIDTH(0.0));
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_CNTL, 1);
-	OUT_RING(ring, 0x00000000);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_CL_CNTL, 1);
-	OUT_RING(ring, 0x00000181);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_LRZ_CNTL, 1);
-	OUT_RING(ring, 0x00000000);
-
-	OUT_PKT4(ring, REG_A6XX_RB_MRT_BUF_INFO(0), 5);
-	OUT_RING(ring, A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT(RB5_R16_UNORM) |
-			A6XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(TILE6_LINEAR) |
-			A6XX_RB_MRT_BUF_INFO_COLOR_SWAP(WZYX));
-	OUT_RING(ring, A6XX_RB_MRT_PITCH(zsbuf->lrz_pitch * 2));
-	OUT_RING(ring, A6XX_RB_MRT_ARRAY_PITCH(fd_bo_size(zsbuf->lrz)));
-	OUT_RELOCW(ring, zsbuf->lrz, 0x1000, 0, 0);
-
-	OUT_PKT4(ring, REG_A6XX_RB_RENDER_CNTL, 1);
-	OUT_RING(ring, 0x00000000);
-
-	OUT_PKT4(ring, REG_A6XX_RB_DEST_MSAA_CNTL, 1);
-	OUT_RING(ring, A6XX_RB_DEST_MSAA_CNTL_SAMPLES(MSAA_ONE));
-
-	OUT_PKT4(ring, REG_A6XX_RB_BLIT_CNTL, 1);
-	OUT_RING(ring, A6XX_RB_BLIT_CNTL_BUF(BLIT_MRT0));
-
-	OUT_PKT4(ring, REG_A6XX_RB_CLEAR_CNTL, 1);
-	OUT_RING(ring, A6XX_RB_CLEAR_CNTL_FAST_CLEAR |
-			A6XX_RB_CLEAR_CNTL_MASK(0xf));
-
-	OUT_PKT4(ring, REG_A6XX_RB_CLEAR_COLOR_DW0, 1);
-	OUT_RING(ring, clear);  /* RB_CLEAR_COLOR_DW0 */
-
-	OUT_PKT4(ring, REG_A6XX_VSC_RESOLVE_CNTL, 2);
-	OUT_RING(ring, A6XX_VSC_RESOLVE_CNTL_X(zsbuf->lrz_width) |
-			 A6XX_VSC_RESOLVE_CNTL_Y(zsbuf->lrz_height));
-	OUT_RING(ring, 0x00000000);   // XXX UNKNOWN_0CDE
-
-	OUT_PKT4(ring, REG_A6XX_RB_CNTL, 1);
-	OUT_RING(ring, A6XX_RB_CNTL_BYPASS);
-
-	OUT_PKT4(ring, REG_A6XX_RB_RESOLVE_CNTL_1, 2);
-	OUT_RING(ring, A6XX_RB_RESOLVE_CNTL_1_X(0) |
-			A6XX_RB_RESOLVE_CNTL_1_Y(0));
-	OUT_RING(ring, A6XX_RB_RESOLVE_CNTL_2_X(zsbuf->lrz_width - 1) |
-			A6XX_RB_RESOLVE_CNTL_2_Y(zsbuf->lrz_height - 1));
-
-	fd6_emit_blit(batch->ctx, ring);
-}
-#endif
-
-#if 0
-clear_with_cp_blit()
-{
-	/* Clear with CP_BLIT */
-	WRITE(REG_A6XX_GRAS_2D_BLIT_CNTL, 0x10f43180);
-
-	OUT_PKT4(ring, REG_A6XX_SP_PS_2D_SRC_INFO, 7);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-
-	WRITE(0xacc0, 0xf181);
-	WRITE(0xacc0, 0xf181);
-
-	WRITE(REG_A6XX_GRAS_2D_BLIT_CNTL, 0x10f43180);
-	WRITE(REG_A6XX_RB_2D_BLIT_CNTL, 0x10f43180);
-
-	OUT_PKT4(ring, REG_A6XX_RB_2D_SRC_SOLID_C0, 4);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0xff);
-	OUT_RING(ring, 0);
-
-	DBG("%x %x %x %x\n", color->ui[0], color->ui[1], color->ui[2], color->ui[3]);
-
-	struct pipe_surface *psurf = pfb->cbufs[0];
-	struct fd_resource *rsc = fd_resource(psurf->texture);
-	struct fd_resource_slice *slice = fd_resource_slice(rsc, psurf->u.tex.level);
-
-	uint32_t offset = fd_resource_offset(rsc, psurf->u.tex.level,
-										 psurf->u.tex.first_layer);
-	uint32_t stride = slice->pitch * rsc->cpp;
-
-	enum a6xx_color_fmt format = fd6_pipe2color(pfmt);
-	OUT_PKT4(ring, REG_A6XX_RB_2D_DST_INFO, 9);
-	OUT_RING(ring,
-			 A6XX_RB_2D_DST_INFO_COLOR_FORMAT(format) |
-			 A6XX_RB_2D_DST_INFO_TILE_MODE(TILE6_LINEAR) |
-			 A6XX_RB_2D_DST_INFO_COLOR_SWAP(WXYZ));
-	OUT_RELOCW(ring, rsc->bo, offset, 0, 0);  /* RB_2D_DST_LO/HI */
-	OUT_RING(ring, A6XX_RB_2D_DST_SIZE_PITCH(stride));
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_2D_SRC_TL_X, 4);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-	OUT_RING(ring, 0);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_2D_DST_TL, 2);
-	OUT_RING(ring,
-			 A6XX_GRAS_2D_DST_TL_X(ctx->batch->max_scissor.minx) |
-			 A6XX_GRAS_2D_DST_TL_Y(ctx->batch->max_scissor.miny));
-	OUT_RING(ring,
-			 A6XX_GRAS_2D_DST_BR_X(ctx->batch->max_scissor.maxx) |
-			 A6XX_GRAS_2D_DST_BR_Y(ctx->batch->max_scissor.maxy));
-
-	OUT_PKT7(ring, CP_BLIT, 1);
-	OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_SCALE));
-}
-#endif
-
 static bool
 fd6_clear(struct fd_context *ctx, unsigned buffers,
 		const union pipe_color_union *color, double depth, unsigned stencil)
 {
 	struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
-	struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
-	struct fd_ringbuffer *ring = ctx->batch->draw;
+	const bool has_depth = pfb->zsbuf;
+	unsigned color_buffers = buffers >> 2;
+	unsigned i;
 
-	if ((buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) &&
-			is_z32(pfb->zsbuf->format))
+	/* If we're clearing after draws, fallback to 3D pipe clears.  We could
+	 * use blitter clears in the draw batch but then we'd have to patch up the
+	 * gmem offsets. This doesn't seem like a useful thing to optimize for
+	 * however.*/
+	if (ctx->batch->num_draws > 0)
 		return false;
 
-	ctx->batch->max_scissor.minx = MIN2(ctx->batch->max_scissor.minx, scissor->minx);
-	ctx->batch->max_scissor.miny = MIN2(ctx->batch->max_scissor.miny, scissor->miny);
-	ctx->batch->max_scissor.maxx = MAX2(ctx->batch->max_scissor.maxx, scissor->maxx);
-	ctx->batch->max_scissor.maxy = MAX2(ctx->batch->max_scissor.maxy, scissor->maxy);
+	foreach_bit(i, color_buffers)
+		ctx->batch->clear_color[i] = *color;
+	if (buffers & PIPE_CLEAR_DEPTH)
+		ctx->batch->clear_depth = depth;
+	if (buffers & PIPE_CLEAR_STENCIL)
+		ctx->batch->clear_stencil = stencil;
 
-	fd6_emit_render_cntl(ctx, true, false);
+	ctx->batch->fast_cleared |= buffers;
 
-	OUT_PKT4(ring, REG_A6XX_RB_BLIT_SCISSOR_TL, 2);
-	OUT_RING(ring, A6XX_RB_BLIT_SCISSOR_TL_X(scissor->minx) |
-			 A6XX_RB_BLIT_SCISSOR_TL_Y(scissor->miny));
-	OUT_RING(ring, A6XX_RB_BLIT_SCISSOR_BR_X(scissor->maxx - 1) |
-			 A6XX_RB_BLIT_SCISSOR_BR_Y(scissor->maxy - 1));
-
-	if (buffers & PIPE_CLEAR_COLOR) {
-		for (int i = 0; i < pfb->nr_cbufs; i++) {
-			union util_color uc = {0};
-
-			if (!pfb->cbufs[i])
-				continue;
-
-			if (!(buffers & (PIPE_CLEAR_COLOR0 << i)))
-				continue;
-
-			enum pipe_format pfmt = pfb->cbufs[i]->format;
-
-			// XXX I think RB_CLEAR_COLOR_DWn wants to take into account SWAP??
-			union pipe_color_union swapped;
-			switch (fd6_pipe2swap(pfmt)) {
-			case WZYX:
-				swapped.ui[0] = color->ui[0];
-				swapped.ui[1] = color->ui[1];
-				swapped.ui[2] = color->ui[2];
-				swapped.ui[3] = color->ui[3];
-				break;
-			case WXYZ:
-				swapped.ui[2] = color->ui[0];
-				swapped.ui[1] = color->ui[1];
-				swapped.ui[0] = color->ui[2];
-				swapped.ui[3] = color->ui[3];
-				break;
-			case ZYXW:
-				swapped.ui[3] = color->ui[0];
-				swapped.ui[0] = color->ui[1];
-				swapped.ui[1] = color->ui[2];
-				swapped.ui[2] = color->ui[3];
-				break;
-			case XYZW:
-				swapped.ui[3] = color->ui[0];
-				swapped.ui[2] = color->ui[1];
-				swapped.ui[1] = color->ui[2];
-				swapped.ui[0] = color->ui[3];
-				break;
-			}
-
-			if (util_format_is_pure_uint(pfmt)) {
-				util_format_write_4ui(pfmt, swapped.ui, 0, &uc, 0, 0, 0, 1, 1);
-			} else if (util_format_is_pure_sint(pfmt)) {
-				util_format_write_4i(pfmt, swapped.i, 0, &uc, 0, 0, 0, 1, 1);
-			} else {
-				util_pack_color(swapped.f, pfmt, &uc);
-			}
-
-			OUT_PKT4(ring, REG_A6XX_RB_BLIT_DST_INFO, 1);
-			OUT_RING(ring, A6XX_RB_BLIT_DST_INFO_TILE_MODE(TILE6_LINEAR) |
-				A6XX_RB_BLIT_DST_INFO_COLOR_FORMAT(fd6_pipe2color(pfmt)));
-
-			OUT_PKT4(ring, REG_A6XX_RB_BLIT_INFO, 1);
-			OUT_RING(ring, A6XX_RB_BLIT_INFO_GMEM |
-				A6XX_RB_BLIT_INFO_CLEAR_MASK(0xf));
-
-			OUT_PKT4(ring, REG_A6XX_RB_BLIT_BASE_GMEM, 1);
-			OUT_RINGP(ring, i, &ctx->batch->gmem_patches);
-
-			OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_88D0, 1);
-			OUT_RING(ring, 0);
-
-			OUT_PKT4(ring, REG_A6XX_RB_BLIT_CLEAR_COLOR_DW0, 4);
-			OUT_RING(ring, uc.ui[0]);
-			OUT_RING(ring, uc.ui[1]);
-			OUT_RING(ring, uc.ui[2]);
-			OUT_RING(ring, uc.ui[3]);
-
-			fd6_emit_blit(ctx, ring);
+	if (has_depth && (buffers & PIPE_CLEAR_DEPTH)) {
+		struct fd_resource *zsbuf = fd_resource(pfb->zsbuf->texture);
+		if (zsbuf->lrz && !is_z32(pfb->zsbuf->format)) {
+			zsbuf->lrz_valid = true;
+			fd6_clear_lrz(ctx->batch, zsbuf, depth);
 		}
-	}
-
-	if (pfb->zsbuf && (buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL))) {
-		enum pipe_format pfmt = pfb->zsbuf->format;
-		uint32_t clear = util_pack_z_stencil(pfmt, depth, stencil);
-		uint32_t mask = 0;
-
-		if (buffers & PIPE_CLEAR_DEPTH)
-			mask |= 0x1;
-
-		if (buffers & PIPE_CLEAR_STENCIL)
-			mask |= 0x2;
-
-		OUT_PKT4(ring, REG_A6XX_RB_BLIT_DST_INFO, 1);
-		OUT_RING(ring, A6XX_RB_BLIT_DST_INFO_TILE_MODE(TILE6_LINEAR) |
-			A6XX_RB_BLIT_DST_INFO_COLOR_FORMAT(fd6_pipe2color(pfmt)));
-
-		OUT_PKT4(ring, REG_A6XX_RB_BLIT_INFO, 1);
-		OUT_RING(ring, A6XX_RB_BLIT_INFO_GMEM |
-			// XXX UNK0 for separate stencil ??
-			A6XX_RB_BLIT_INFO_DEPTH |
-			A6XX_RB_BLIT_INFO_CLEAR_MASK(mask));
-
-		OUT_PKT4(ring, REG_A6XX_RB_BLIT_BASE_GMEM, 1);
-		OUT_RINGP(ring, MAX_RENDER_TARGETS, &ctx->batch->gmem_patches);
-
-		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_88D0, 1);
-		OUT_RING(ring, 0);
-
-		OUT_PKT4(ring, REG_A6XX_RB_BLIT_CLEAR_COLOR_DW0, 1);
-		OUT_RING(ring, clear);
-
-		fd6_emit_blit(ctx, ring);
-
-#if 0
-		if (pfb->zsbuf && (buffers & PIPE_CLEAR_DEPTH)) {
-			struct fd_resource *zsbuf = fd_resource(pfb->zsbuf->texture);
-			if (zsbuf->lrz) {
-				zsbuf->lrz_valid = true;
-				fd6_clear_lrz(ctx->batch, zsbuf, depth);
-			}
-		}
-#endif
 	}
 
 	return true;

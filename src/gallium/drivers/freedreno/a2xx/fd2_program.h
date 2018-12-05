@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012-2013 Rob Clark <robclark@freedesktop.org>
  *
@@ -37,7 +35,7 @@
 #include "disasm.h"
 
 struct fd2_shader_stateobj {
-	enum shader_t type;
+	gl_shader_stage type;
 
 	uint32_t *bin;
 

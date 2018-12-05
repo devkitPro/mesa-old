@@ -34,17 +34,41 @@
 #include "fd6_context.h"
 #include "fd6_format.h"
 #include "fd6_program.h"
-#include "ir3_shader.h"
+#include "ir3_gallium.h"
 
 struct fd_ringbuffer;
 
+/* To collect all the state objects to emit in a single CP_SET_DRAW_STATE
+ * packet, the emit tracks a collection of however many state_group's that
+ * need to be emit'd.
+ */
+enum fd6_state_id {
+	FD6_GROUP_PROG,
+	FD6_GROUP_PROG_BINNING,
+	FD6_GROUP_LRZ,
+	FD6_GROUP_LRZ_BINNING,
+	FD6_GROUP_VBO,
+	FD6_GROUP_VBO_BINNING,
+	FD6_GROUP_VS_CONST,
+	FD6_GROUP_FS_CONST,
+	FD6_GROUP_VS_TEX,
+	FD6_GROUP_FS_TEX,
+	FD6_GROUP_RASTERIZER,
+	FD6_GROUP_ZSA,
+};
+
+struct fd6_state_group {
+	struct fd_ringbuffer *stateobj;
+	enum fd6_state_id group_id;
+	uint8_t enable_mask;
+};
+
 /* grouped together emit-state for prog/vertex/state emit: */
 struct fd6_emit {
-	struct pipe_debug_callback *debug;
+	struct fd_context *ctx;
 	const struct fd_vertex_state *vtx;
-	const struct fd_program_stateobj *prog;
 	const struct pipe_draw_info *info;
-	struct ir3_shader_key key;
+	struct ir3_cache_key key;
 	enum fd_dirty_3d_state dirty;
 
 	uint32_t sprite_coord_enable;  /* bitmask */
@@ -58,129 +82,87 @@ struct fd6_emit {
 	 */
 	bool no_lrz_write;
 
-	/* cached to avoid repeated lookups of same variants: */
-	const struct ir3_shader_variant *vp, *fp;
-	/* TODO: other shader stages.. */
+	/* cached to avoid repeated lookups: */
+	const struct fd6_program_state *prog;
+
+	struct ir3_shader_variant *bs;
+	struct ir3_shader_variant *vs;
+	struct ir3_shader_variant *fs;
 
 	unsigned streamout_mask;
+
+	struct fd6_state_group groups[32];
+	unsigned num_groups;
 };
 
-static inline enum a6xx_color_fmt fd6_emit_format(struct pipe_surface *surf)
+static inline const struct fd6_program_state *
+fd6_emit_get_prog(struct fd6_emit *emit)
 {
-	if (!surf)
-		return 0;
-	return fd6_pipe2color(surf->format);
+	if (!emit->prog) {
+		struct fd6_context *fd6_ctx = fd6_context(emit->ctx);
+		struct ir3_program_state *s =
+				ir3_cache_lookup(fd6_ctx->shader_cache, &emit->key, &emit->ctx->debug);
+		emit->prog = fd6_program_state(s);
+	}
+	return emit->prog;
 }
 
-static inline const struct ir3_shader_variant *
-fd6_emit_get_vp(struct fd6_emit *emit)
+static inline void
+fd6_emit_add_group(struct fd6_emit *emit, struct fd_ringbuffer *stateobj,
+		enum fd6_state_id group_id, unsigned enable_mask)
 {
-	if (!emit->vp) {
-		struct fd6_shader_stateobj *so = emit->prog->vp;
-		emit->vp = ir3_shader_variant(so->shader, emit->key, emit->debug);
-	}
-	return emit->vp;
+	debug_assert(emit->num_groups < ARRAY_SIZE(emit->groups));
+	struct fd6_state_group *g = &emit->groups[emit->num_groups++];
+	g->stateobj = fd_ringbuffer_ref(stateobj);
+	g->group_id = group_id;
+	g->enable_mask = enable_mask;
 }
 
-static inline const struct ir3_shader_variant *
-fd6_emit_get_fp(struct fd6_emit *emit)
+static inline void
+fd6_event_write(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		enum vgt_event_type evt, bool timestamp)
 {
-	if (!emit->fp) {
-		if (emit->key.binning_pass) {
-			/* use dummy stateobj to simplify binning vs non-binning: */
-			static const struct ir3_shader_variant binning_fp = {};
-			emit->fp = &binning_fp;
-		} else {
-			struct fd6_shader_stateobj *so = emit->prog->fp;
-			emit->fp = ir3_shader_variant(so->shader, emit->key, emit->debug);
-		}
+	fd_reset_wfi(batch);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, timestamp ? 4 : 1);
+	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(evt));
+	if (timestamp) {
+		struct fd6_context *fd6_ctx = fd6_context(batch->ctx);
+		OUT_RELOCW(ring, fd6_ctx->blit_mem, 0, 0, 0);  /* ADDR_LO/HI */
+		OUT_RING(ring, ++fd6_ctx->seqno);
 	}
-	return emit->fp;
 }
 
 static inline void
 fd6_cache_flush(struct fd_batch *batch, struct fd_ringbuffer *ring)
 {
-	fd_reset_wfi(batch);
-#if 0
-	OUT_PKT4(ring, REG_A6XX_UCHE_CACHE_INVALIDATE_MIN_LO, 5);
-	OUT_RING(ring, 0x00000000);   /* UCHE_CACHE_INVALIDATE_MIN_LO */
-	OUT_RING(ring, 0x00000000);   /* UCHE_CACHE_INVALIDATE_MIN_HI */
-	OUT_RING(ring, 0x00000000);   /* UCHE_CACHE_INVALIDATE_MAX_LO */
-	OUT_RING(ring, 0x00000000);   /* UCHE_CACHE_INVALIDATE_MAX_HI */
-	OUT_RING(ring, 0x00000012);   /* UCHE_CACHE_INVALIDATE */
-	fd_wfi(batch, ring);
-#else
-	DBG("fd6_cache_flush stub");
-#endif
+	fd6_event_write(batch, ring, 0x31, false);
 }
 
 static inline void
-fd6_emit_blit(struct fd_context *ctx, struct fd_ringbuffer *ring)
+fd6_emit_blit(struct fd_batch *batch, struct fd_ringbuffer *ring)
 {
 	emit_marker6(ring, 7);
-
-	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
-	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(BLIT));
-
+	fd6_event_write(batch, ring, BLIT, false);
 	emit_marker6(ring, 7);
-}
-
-static inline void
-fd6_emit_render_cntl(struct fd_context *ctx, bool blit, bool binning)
-{
-#if 0
-	struct fd_ringbuffer *ring = binning ? ctx->batch->binning : ctx->batch->draw;
-
-	/* TODO eventually this partially depends on the pfb state, ie.
-	 * which of the cbuf(s)/zsbuf has an UBWC flag buffer.. that part
-	 * we could probably cache and just regenerate if framebuffer
-	 * state is dirty (or something like that)..
-	 *
-	 * Other bits seem to depend on query state, like if samples-passed
-	 * query is active.
-	 */
-	bool samples_passed = (fd6_context(ctx)->samples_passed_queries > 0);
-	OUT_PKT4(ring, REG_A6XX_RB_RENDER_CNTL, 1);
-	OUT_RING(ring, 0x00000000 |   /* RB_RENDER_CNTL */
-			COND(binning, A6XX_RB_RENDER_CNTL_BINNING_PASS) |
-			COND(binning, A6XX_RB_RENDER_CNTL_DISABLE_COLOR_PIPE) |
-			COND(samples_passed, A6XX_RB_RENDER_CNTL_SAMPLES_PASSED) |
-			COND(!blit, 0x8));
-	OUT_PKT4(ring, REG_A6XX_GRAS_SC_CNTL, 1);
-	OUT_RING(ring, 0x00000008 |   /* GRAS_SC_CNTL */
-			COND(binning, A6XX_GRAS_SC_CNTL_BINNING_PASS) |
-			COND(samples_passed, A6XX_GRAS_SC_CNTL_SAMPLES_PASSED));
-#else
-	DBG("render ctl stub");
-#endif
 }
 
 static inline void
 fd6_emit_lrz_flush(struct fd_ringbuffer *ring)
 {
-	/* TODO I think the extra writes to GRAS_LRZ_CNTL are probably
-	 * a workaround and not needed on all a5xx.
-	 */
-	OUT_PKT4(ring, REG_A6XX_GRAS_LRZ_CNTL, 1);
-	OUT_RING(ring, A6XX_GRAS_LRZ_CNTL_ENABLE);
-
 	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
 	OUT_RING(ring, LRZ_FLUSH);
-
-	OUT_PKT4(ring, REG_A6XX_GRAS_LRZ_CNTL, 1);
-	OUT_RING(ring, 0x0);
 }
 
 static inline enum a6xx_state_block
-fd6_stage2shadersb(enum shader_t type)
+fd6_stage2shadersb(gl_shader_stage type)
 {
 	switch (type) {
-	case SHADER_VERTEX:
+	case MESA_SHADER_VERTEX:
 		return SB6_VS_SHADER;
-	case SHADER_FRAGMENT:
+	case MESA_SHADER_FRAGMENT:
 		return SB6_FS_SHADER;
-	case SHADER_COMPUTE:
+	case MESA_SHADER_COMPUTE:
 		return SB6_CS_SHADER;
 	default:
 		unreachable("bad shader type");
@@ -188,10 +170,11 @@ fd6_stage2shadersb(enum shader_t type)
 	}
 }
 
-void fd6_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd6_emit *emit);
+bool fd6_emit_textures(struct fd_pipe *pipe, struct fd_ringbuffer *ring,
+		enum a6xx_state_block sb, struct fd_texture_stateobj *tex,
+		unsigned bcolor_offset);
 
-void fd6_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		struct fd6_emit *emit);
+void fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit);
 
 void fd6_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		struct ir3_shader_variant *cp);
@@ -199,6 +182,14 @@ void fd6_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 void fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring);
 
 void fd6_emit_init(struct pipe_context *pctx);
+
+static inline void
+fd6_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
+{
+	emit_marker6(ring, 6);
+	__OUT_IB5(ring, target);
+	emit_marker6(ring, 6);
+}
 
 #define WRITE(reg, val) do {					\
 		OUT_PKT4(ring, reg, 1);					\

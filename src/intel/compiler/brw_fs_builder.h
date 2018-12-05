@@ -114,11 +114,25 @@ namespace brw {
       fs_builder
       group(unsigned n, unsigned i) const
       {
-         assert(force_writemask_all ||
-                (n <= dispatch_width() && i < dispatch_width() / n));
          fs_builder bld = *this;
+
+         if (n <= dispatch_width() && i < dispatch_width() / n) {
+            bld._group += i * n;
+         } else {
+            /* The requested channel group isn't a subset of the channel group
+             * of this builder, which means that the resulting instructions
+             * would use (potentially undefined) channel enable signals not
+             * specified by the parent builder.  That's only valid if the
+             * instruction doesn't have per-channel semantics, in which case
+             * we should clear off the default group index in order to prevent
+             * emitting instructions with channel group not aligned to their
+             * own execution size.
+             */
+            assert(force_writemask_all);
+            bld._group = 0;
+         }
+
          bld._dispatch_width = n;
-         bld._group += i * n;
          return bld;
       }
 
@@ -795,7 +809,7 @@ namespace brw {
              !gen_device_info_is_9lp(shader->devinfo))
             return false;
 
-         if (type_sz(type > 4))
+         if (type_sz(type) > 4)
             return true;
 
          if (opcode == BRW_OPCODE_MUL &&

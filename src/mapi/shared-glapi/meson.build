@@ -40,7 +40,7 @@ libglapi = shared_library(
   'glapi',
   [files_mapi_glapi, files_mapi_util, shared_glapi_mapi_tmp_h],
   c_args : [
-    c_msvc_compat_args, '-DMAPI_MODE_GLAPI',
+    c_msvc_compat_args, c_vis_args, '-DMAPI_MODE_GLAPI',
     '-DMAPI_ABI_HEADER="@0@"'.format(shared_glapi_mapi_tmp_h.full_path()),
   ],
   link_args : [ld_args_gc_sections],
@@ -50,7 +50,7 @@ libglapi = shared_library(
   install : true,
 )
 
-if with_tests
+if with_any_opengl and with_tests
   test(
     'shared-glapi-test',
     executable(
@@ -60,6 +60,7 @@ if with_tests
       include_directories : [inc_src, inc_include, inc_mapi],
       link_with : [libglapi],
       dependencies : [dep_thread, idep_gtest],
-    )
+    ),
+    suite : ['mapi'],
   )
 endif

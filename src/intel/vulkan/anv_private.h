@@ -76,8 +76,8 @@ struct gen_l3_config;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_intel.h>
 #include <vulkan/vk_icd.h>
-#include <vulkan/vk_android_native_buffer.h>
 
+#include "anv_android.h"
 #include "anv_entrypoints.h"
 #include "anv_extensions.h"
 #include "isl/isl.h"
@@ -381,6 +381,11 @@ vk_to_isl_color(VkClearColorValue color)
  * propagating errors. Might be useful to plug in a stack trace here.
  */
 
+VkResult __vk_errorv(struct anv_instance *instance, const void *object,
+                     VkDebugReportObjectTypeEXT type, VkResult error,
+                     const char *file, int line, const char *format,
+                     va_list args);
+
 VkResult __vk_errorf(struct anv_instance *instance, const void *object,
                      VkDebugReportObjectTypeEXT type, VkResult error,
                      const char *file, int line, const char *format, ...);
@@ -389,6 +394,9 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
 #define vk_error(error) __vk_errorf(NULL, NULL,\
                                     VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,\
                                     error, __FILE__, __LINE__, NULL)
+#define vk_errorv(instance, obj, error, format, args)\
+    __vk_errorv(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
+                __FILE__, __LINE__, format, args)
 #define vk_errorf(instance, obj, error, format, ...)\
     __vk_errorf(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
                 __FILE__, __LINE__, format, ## __VA_ARGS__)
@@ -555,6 +563,10 @@ anv_multialloc_alloc2(struct anv_multialloc *ma,
 {
    return anv_multialloc_alloc(ma, alloc ? alloc : parent_alloc, scope);
 }
+
+/* Extra ANV-defined BO flags which won't be passed to the kernel */
+#define ANV_BO_EXTERNAL    (1ull << 31)
+#define ANV_BO_FLAG_MASK   (1ull << 31)
 
 struct anv_bo {
    uint32_t gem_handle;
@@ -837,6 +849,12 @@ struct anv_physical_device {
     bool                                        no_hw;
     char                                        path[20];
     const char *                                name;
+    struct {
+       uint16_t                                 domain;
+       uint8_t                                  bus;
+       uint8_t                                  device;
+       uint8_t                                  function;
+    }                                           pci_info;
     struct gen_device_info                      info;
     /** Amount of "GPU memory" we want to advertise
      *
@@ -899,7 +917,8 @@ struct anv_instance {
     struct anv_app_info                         app_info;
 
     struct anv_instance_extension_table         enabled_extensions;
-    struct anv_dispatch_table                   dispatch;
+    struct anv_instance_dispatch_table          dispatch;
+    struct anv_device_dispatch_table            device_dispatch;
 
     int                                         physicalDeviceCount;
     struct anv_physical_device                  physicalDevice;
@@ -982,7 +1001,7 @@ struct anv_device {
     bool                                        can_chain_batches;
     bool                                        robust_buffer_access;
     struct anv_device_extension_table           enabled_extensions;
-    struct anv_dispatch_table                   dispatch;
+    struct anv_device_dispatch_table            dispatch;
 
     pthread_mutex_t                             vma_mutex;
     struct util_vma_heap                        vma_lo;
@@ -1013,10 +1032,11 @@ struct anv_device {
     struct anv_scratch_pool                     scratch_pool;
 
     uint32_t                                    default_mocs;
+    uint32_t                                    external_mocs;
 
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
-    bool                                        lost;
+    bool                                        _lost;
 };
 
 static inline struct anv_state_pool *
@@ -1042,6 +1062,15 @@ anv_binding_table_pool_free(struct anv_device *device, struct anv_state state) {
    anv_state_pool_free(anv_binding_table_pool(device), state);
 }
 
+static inline uint32_t
+anv_mocs_for_bo(const struct anv_device *device, const struct anv_bo *bo)
+{
+   if (bo->flags & ANV_BO_EXTERNAL)
+      return device->external_mocs;
+   else
+      return device->default_mocs;
+}
+
 static void inline
 anv_state_flush(struct anv_device *device, struct anv_state state)
 {
@@ -1053,6 +1082,18 @@ anv_state_flush(struct anv_device *device, struct anv_state state)
 
 void anv_device_init_blorp(struct anv_device *device);
 void anv_device_finish_blorp(struct anv_device *device);
+
+VkResult _anv_device_set_lost(struct anv_device *device,
+                              const char *file, int line,
+                              const char *msg, ...);
+#define anv_device_set_lost(dev, ...) \
+   _anv_device_set_lost(dev, __FILE__, __LINE__, __VA_ARGS__)
+
+static inline bool
+anv_device_is_lost(struct anv_device *device)
+{
+   return unlikely(device->_lost);
+}
 
 VkResult anv_device_execbuf(struct anv_device *device,
                             struct drm_i915_gem_execbuffer2 *execbuf,
@@ -1088,6 +1129,8 @@ int anv_gem_get_aperture(int fd, uint64_t *size);
 int anv_gem_gpu_get_reset_stats(struct anv_device *device,
                                 uint32_t *active, uint32_t *pending);
 int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
+int anv_gem_reg_read(struct anv_device *device,
+                     uint32_t offset, uint64_t *result);
 uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
 int anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
@@ -1323,6 +1366,12 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .AgeforQUADLRU = 0                                       \
    }
 
+#define GEN8_EXTERNAL_MOCS (struct GEN8_MEMORY_OBJECT_CONTROL_STATE) {     \
+      .MemoryTypeLLCeLLCCacheabilityControl = UCwithFenceifcoherentcycle,  \
+      .TargetCache = L3DefertoPATforLLCeLLCselection,                      \
+      .AgeforQUADLRU = 0                                                   \
+   }
+
 /* Skylake: MOCS is now an index into an array of 62 different caching
  * configurations programmed by the kernel.
  */
@@ -1332,9 +1381,9 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .IndextoMOCSTables                           = 2         \
    }
 
-#define GEN9_MOCS_PTE {                                 \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */       \
-      .IndextoMOCSTables                           = 1  \
+#define GEN9_EXTERNAL_MOCS (struct GEN9_MEMORY_OBJECT_CONTROL_STATE) {  \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                       \
+      .IndextoMOCSTables                           = 1                  \
    }
 
 /* Cannonlake MOCS defines are duplicates of Skylake MOCS defines. */
@@ -1343,9 +1392,9 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .IndextoMOCSTables                           = 2         \
    }
 
-#define GEN10_MOCS_PTE {                                 \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */       \
-      .IndextoMOCSTables                           = 1  \
+#define GEN10_EXTERNAL_MOCS (struct GEN10_MEMORY_OBJECT_CONTROL_STATE) {   \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                          \
+      .IndextoMOCSTables                           = 1                     \
    }
 
 /* Ice Lake MOCS defines are duplicates of Skylake MOCS defines. */
@@ -1354,9 +1403,9 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .IndextoMOCSTables                           = 2         \
    }
 
-#define GEN11_MOCS_PTE {                                 \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */       \
-      .IndextoMOCSTables                           = 1  \
+#define GEN11_EXTERNAL_MOCS (struct GEN11_MEMORY_OBJECT_CONTROL_STATE) {   \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                          \
+      .IndextoMOCSTables                           = 1                     \
    }
 
 struct anv_device_memory {
@@ -1656,7 +1705,8 @@ anv_buffer_get_range(struct anv_buffer *buffer, uint64_t offset, uint64_t range)
    if (range == VK_WHOLE_SIZE) {
       return buffer->size - offset;
    } else {
-      assert(range <= buffer->size);
+      assert(range + offset >= range);
+      assert(range + offset <= buffer->size);
       return range;
    }
 }
@@ -1697,6 +1747,13 @@ enum anv_pipe_bits {
     * we would have to CS stall on every flush which could be bad.
     */
    ANV_PIPE_NEEDS_CS_STALL_BIT               = (1 << 21),
+
+   /* This bit does not exist directly in PIPE_CONTROL. It means that render
+    * target operations are ongoing. Some operations like copies on the
+    * command streamer might need to be aware of this to trigger the
+    * appropriate stall before they can proceed with the copy.
+    */
+   ANV_PIPE_RENDER_TARGET_WRITES              = (1 << 22),
 };
 
 #define ANV_PIPE_FLUSH_BITS ( \
@@ -2499,6 +2556,9 @@ struct anv_format_plane {
 
    /* How to map sampled ycbcr planes to a single 4 component element. */
    struct isl_swizzle ycbcr_swizzle;
+
+   /* What aspect is associated to this plane */
+   VkImageAspectFlags aspect;
 };
 
 
@@ -2529,28 +2589,6 @@ anv_image_aspect_to_plane(VkImageAspectFlags image_aspects,
       /* Purposefully assert with depth/stencil aspects. */
       unreachable("invalid image aspect");
    }
-}
-
-static inline uint32_t
-anv_image_aspect_get_planes(VkImageAspectFlags aspect_mask)
-{
-   uint32_t planes = 0;
-
-   if (aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT |
-                      VK_IMAGE_ASPECT_DEPTH_BIT |
-                      VK_IMAGE_ASPECT_STENCIL_BIT |
-                      VK_IMAGE_ASPECT_PLANE_0_BIT))
-      planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_1_BIT)
-      planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT)
-      planes++;
-
-   if ((aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
-       (aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0)
-      planes++;
-
-   return planes;
 }
 
 static inline VkImageAspectFlags
@@ -2814,8 +2852,7 @@ anv_image_get_fast_clear_type_addr(const struct anv_device *device,
    const unsigned clear_color_state_size = device->info.gen >= 10 ?
       device->isl_dev.ss.clear_color_state_size :
       device->isl_dev.ss.clear_value_size;
-   addr.offset += clear_color_state_size;
-   return addr;
+   return anv_address_add(addr, clear_color_state_size);
 }
 
 static inline struct anv_address
@@ -3046,14 +3083,6 @@ VkResult anv_image_create(VkDevice _device,
                           const VkAllocationCallbacks* alloc,
                           VkImage *pImage);
 
-#ifdef ANDROID
-VkResult anv_image_from_gralloc(VkDevice device_h,
-                                const VkImageCreateInfo *base_info,
-                                const VkNativeBufferANDROID *gralloc_info,
-                                const VkAllocationCallbacks *alloc,
-                                VkImage *pImage);
-#endif
-
 const struct anv_surface *
 anv_image_get_surface_for_aspect_mask(const struct anv_image *image,
                                       VkImageAspectFlags aspect_mask);
@@ -3222,12 +3251,17 @@ struct anv_query_pool {
    struct anv_bo                                bo;
 };
 
-int anv_get_entrypoint_index(const char *name);
+int anv_get_instance_entrypoint_index(const char *name);
+int anv_get_device_entrypoint_index(const char *name);
 
 bool
-anv_entrypoint_is_enabled(int index, uint32_t core_version,
-                          const struct anv_instance_extension_table *instance,
-                          const struct anv_device_extension_table *device);
+anv_instance_entrypoint_is_enabled(int index, uint32_t core_version,
+                                   const struct anv_instance_extension_table *instance);
+
+bool
+anv_device_entrypoint_is_enabled(int index, uint32_t core_version,
+                                 const struct anv_instance_extension_table *instance,
+                                 const struct anv_device_extension_table *device);
 
 void *anv_lookup_entrypoint(const struct gen_device_info *devinfo,
                             const char *name);

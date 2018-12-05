@@ -258,6 +258,26 @@ vec4_instruction::can_do_source_mods(const struct gen_device_info *devinfo)
 }
 
 bool
+vec4_instruction::can_do_cmod()
+{
+   if (!backend_instruction::can_do_cmod())
+      return false;
+
+   /* The accumulator result appears to get used for the conditional modifier
+    * generation.  When negating a UD value, there is a 33rd bit generated for
+    * the sign in the accumulator value, so now you can't check, for example,
+    * equality with a 32-bit value.  See piglit fs-op-neg-uvec4.
+    */
+   for (unsigned i = 0; i < 3; i++) {
+      if (src[i].file != BAD_FILE &&
+          type_is_unsigned_int(src[i].type) && src[i].negate)
+         return false;
+   }
+
+   return true;
+}
+
+bool
 vec4_instruction::can_do_writemask(const struct gen_device_info *devinfo)
 {
    switch (opcode) {
@@ -2808,12 +2828,11 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
                const struct brw_vs_prog_key *key,
                struct brw_vs_prog_data *prog_data,
-               const nir_shader *src_shader,
+               nir_shader *shader,
                int shader_time_index,
                char **error_str)
 {
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_VERTEX];
-   nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
 
    const unsigned *assembly = NULL;
