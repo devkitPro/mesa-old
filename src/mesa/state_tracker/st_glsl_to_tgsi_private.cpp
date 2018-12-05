@@ -28,6 +28,10 @@
 #include <mesa/program/prog_instruction.h>
 #include <mesa/program/prog_print.h>
 
+#ifndef NDEBUG
+#include <ostream>
+#endif
+
 static int swizzle_for_type(const glsl_type *type, int component = 0)
 {
    unsigned num_elements = 4;
@@ -223,6 +227,7 @@ bool operator == (const st_src_reg& lhs, const st_src_reg& rhs)
 
 static const char swz_txt[] = "xyzw";
 
+#ifndef NDEBUG
 std::ostream& operator << (std::ostream& os, const st_src_reg& reg)
 {
    if (reg.negate)
@@ -258,6 +263,7 @@ std::ostream& operator << (std::ostream& os, const st_src_reg& reg)
       os << "|";
    return os;
 }
+#endif
 
 st_dst_reg::st_dst_reg(st_src_reg reg)
 {
@@ -363,6 +369,7 @@ bool operator == (const st_dst_reg& lhs, const st_dst_reg& rhs)
    return result;
 }
 
+#ifndef NDEBUG
 std::ostream& operator << (std::ostream& os, const st_dst_reg& reg)
 {
    os << _mesa_register_file_name(reg.file);
@@ -421,3 +428,4 @@ void glsl_to_tgsi_instruction::print(std::ostream& os) const
       }
    }
 }
+#endif

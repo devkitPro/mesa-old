@@ -31,7 +31,7 @@
 #include "compiler/glsl_types.h"
 #include "compiler/glsl/ir.h"
 #include "tgsi/tgsi_info.h"
-#include <ostream>
+#include <iosfwd>
 
 int swizzle_for_size(int size);
 
