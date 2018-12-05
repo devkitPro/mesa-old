@@ -26,7 +26,9 @@
  *    Rob Clark <robclark@freedesktop.org>
  */
 
+#ifdef HAVE_DLFCN_H
 #include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -513,6 +515,7 @@ loader_get_extensions_name(const char *driver_name)
    return name;
 }
 
+#ifdef HAVE_DLFCN_H
 /**
  * Opens a DRI driver using its driver name, returning the __DRIextension
  * entrypoints.
@@ -600,3 +603,4 @@ loader_open_driver(const char *driver_name,
    *out_driver_handle = driver;
    return extensions;
 }
+#endif

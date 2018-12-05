@@ -133,6 +133,12 @@ disk_cache_get_function_identifier(void *ptr, struct mesa_sha1 *ctx)
    return true;
 #else
    return false;
+}
+
+static inline bool
+disk_cache_get_function_identifier(void *ptr, struct mesa_sha1 *ctx)
+{
+   return false;
 #endif
 }
 

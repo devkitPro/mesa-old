@@ -689,18 +689,11 @@ switch_get_proc_address(_EGLDriver *drv, const char *procname)
  * This is the main entrypoint into the driver, called by libEGL.
  * Create a new _EGLDriver object and init its dispatch table.
  */
-_EGLDriver*
-_eglBuiltInDriver(void)
+void
+_eglInitDriver(_EGLDriver *driver)
 {
-    _EGLDriver* driver;
     CALLED();
-    driver = (_EGLDriver*) calloc(1, sizeof(*driver));
-    if (!driver) {
-        _eglError(EGL_BAD_ALLOC, "_eglBuiltInDriver");
-        return NULL;
-    }
 
-    _eglInitDriverFallbacks(driver);
     driver->API.Initialize = switch_initialize;
     driver->API.Terminate = switch_terminate;
     driver->API.CreateContext = switch_create_context;
@@ -713,8 +706,4 @@ _eglBuiltInDriver(void)
     driver->API.GetProcAddress = switch_get_proc_address;
 
     driver->API.SwapBuffers = switch_swap_buffers;
-
-    driver->Name = "Switch";
-
-    return driver;
 }

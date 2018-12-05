@@ -25,6 +25,7 @@
  *
  **************************************************************************/
 
+#include <stdlib.h>
 #ifdef HAVE_LIBDRM
 #include <xf86drm.h>
 #endif
@@ -202,6 +203,7 @@ _eglDeviceSupports(_EGLDevice *dev, _EGLDeviceExtension ext)
    };
 }
 
+#ifdef HAVE_LIBDRM
 /* Ideally we'll have an extension which passes the render node,
  * instead of the card one + magic.
  *
@@ -213,6 +215,7 @@ _eglGetDRMDeviceRenderNode(_EGLDevice *dev)
 {
    return dev->device->nodes[DRM_NODE_RENDER];
 }
+#endif
 
 EGLBoolean
 _eglQueryDeviceAttribEXT(_EGLDevice *dev, EGLint attribute,
