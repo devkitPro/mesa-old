@@ -83,6 +83,7 @@ struct switch_egl_display
 struct switch_egl_config
 {
     _EGLConfig base;
+    struct st_visual stvis;
 };
 
 struct switch_egl_context
@@ -95,7 +96,6 @@ struct switch_egl_surface
 {
     _EGLSurface base;
     struct st_framebuffer_iface *stfbi;
-    struct st_visual stvis;
     struct pipe_resource *textures[ST_ATTACHMENT_COUNT];
     NvFence fences[2];
     bool fence_swap;
@@ -109,23 +109,6 @@ struct switch_framebuffer
 };
 
 static uint32_t drifb_ID = 0;
-
-static void
-switch_fill_st_visual(struct st_visual *visual, _EGLConfig *conf)
-{
-    CALLED();
-    // TODO: Create the visual from the config
-    static const struct st_visual stvis = {
-        .no_config            = false,
-        .buffer_mask          = ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK,
-        .color_format         = PIPE_FORMAT_RGBA8888_UNORM,
-        .depth_stencil_format = PIPE_FORMAT_Z24_UNORM_S8_UINT,
-        .accum_format         = PIPE_FORMAT_R16G16B16A16_FLOAT,
-        .samples              = 0,
-        .render_buffer        = ST_ATTACHMENT_BACK_LEFT_MASK
-    };
-    *visual = stvis;
-}
 
 static inline struct switch_egl_display *
 stfbi_to_display(struct st_framebuffer_iface *stfbi)
@@ -182,7 +165,7 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
         if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
         {
             u32 index = (statts[i] == ST_ATTACHMENT_FRONT_LEFT) ? 1 : 0;
-            format = surface->stvis.color_format;
+            format = surface->stfbi->visual->color_format;
             bind = PIPE_BIND_RENDER_TARGET;
             whandle.type = WINSYS_HANDLE_TYPE_SHARED;
             whandle.handle = gfxGetFramebufferHandle(index, &whandle.offset);
@@ -190,12 +173,12 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
         }
         else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
         {
-            format = surface->stvis.depth_stencil_format;
+            format = surface->stfbi->visual->depth_stencil_format;
             bind = PIPE_BIND_DEPTH_STENCIL;
         }
         else if (statts[i] == ST_ATTACHMENT_ACCUM)
         {
-            format = surface->stvis.accum_format;
+            format = surface->stfbi->visual->accum_format;
             bind = PIPE_BIND_RENDER_TARGET;
         }
 
@@ -235,6 +218,7 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     struct switch_egl_surface *surface;
     struct switch_framebuffer *fb;
     struct switch_egl_display *display = switch_egl_display(dpy);
+    struct switch_egl_config *config = switch_egl_config(conf);
     CALLED();
 
     surface = (struct switch_egl_surface*) calloc(1, sizeof (*surface));
@@ -264,10 +248,8 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     surface->fences[0].id = UINT32_MAX;
     surface->fences[1].id = UINT32_MAX;
 
-    switch_fill_st_visual(&surface->stvis, conf);
-
     /* setup the st_framebuffer_iface */
-    fb->base.visual = &surface->stvis;
+    fb->base.visual = &config->stvis;
     fb->base.flush_front = switch_st_framebuffer_flush_front;
     fb->base.validate = switch_st_framebuffer_validate;
     fb->base.flush_swapbuffers = switch_st_framebuffer_flush_swapbuffers;
@@ -324,63 +306,62 @@ switch_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 
 
 static EGLBoolean
-switch_add_configs_for_visuals(_EGLDisplay *dpy)
+switch_add_config(_EGLDisplay *dpy, EGLint id)
 {
-    struct switch_egl_config* conf;
     CALLED();
+
+    struct switch_egl_config* conf;
     conf = (struct switch_egl_config*) calloc(1, sizeof (*conf));
     if (!conf)
-        return _eglError(EGL_BAD_ALLOC, "switch_add_configs_for_visuals failed to alloc");
+        return _eglError(EGL_BAD_ALLOC, "switch_add_config failed to alloc");
 
     TRACE("Initializing config\n");
-    _eglInitConfig(&conf->base, dpy, 1);
+    _eglInitConfig(&conf->base, dpy, id);
 
-    _eglSetConfigKey(&conf->base, EGL_RED_SIZE, 8);
-    _eglSetConfigKey(&conf->base, EGL_BLUE_SIZE, 8);
-    _eglSetConfigKey(&conf->base, EGL_GREEN_SIZE, 8);
-    _eglSetConfigKey(&conf->base, EGL_LUMINANCE_SIZE, 0);
-    _eglSetConfigKey(&conf->base, EGL_ALPHA_SIZE, 8);
-    _eglSetConfigKey(&conf->base, EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER);
-    EGLint r = (_eglGetConfigKey(&conf->base, EGL_RED_SIZE)
-        + _eglGetConfigKey(&conf->base, EGL_GREEN_SIZE)
-        + _eglGetConfigKey(&conf->base, EGL_BLUE_SIZE)
-        + _eglGetConfigKey(&conf->base, EGL_ALPHA_SIZE));
-    _eglSetConfigKey(&conf->base, EGL_BUFFER_SIZE, r);
-    _eglSetConfigKey(&conf->base, EGL_CONFIG_CAVEAT, EGL_NONE);
-    _eglSetConfigKey(&conf->base, EGL_CONFIG_ID, 1);
-    _eglSetConfigKey(&conf->base, EGL_BIND_TO_TEXTURE_RGB, EGL_FALSE);
-    _eglSetConfigKey(&conf->base, EGL_BIND_TO_TEXTURE_RGBA, EGL_FALSE);
-    _eglSetConfigKey(&conf->base, EGL_STENCIL_SIZE, 8);
-    _eglSetConfigKey(&conf->base, EGL_TRANSPARENT_TYPE, EGL_NONE);
-    _eglSetConfigKey(&conf->base, EGL_NATIVE_RENDERABLE, EGL_TRUE); // Let's say yes
-    _eglSetConfigKey(&conf->base, EGL_NATIVE_VISUAL_ID, 0); // No visual
-    _eglSetConfigKey(&conf->base, EGL_NATIVE_VISUAL_TYPE, EGL_NONE); // No visual
-    _eglSetConfigKey(&conf->base, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT | EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR);
-    _eglSetConfigKey(&conf->base, EGL_SAMPLE_BUFFERS, 0); // TODO: How to get the right value ?
-    _eglSetConfigKey(&conf->base, EGL_SAMPLES, _eglGetConfigKey(&conf->base, EGL_SAMPLE_BUFFERS) == 0 ? 0 : 0);
-    _eglSetConfigKey(&conf->base, EGL_DEPTH_SIZE, 24); // TODO: How to get the right value ?
-    _eglSetConfigKey(&conf->base, EGL_LEVEL, 0);
-    _eglSetConfigKey(&conf->base, EGL_MAX_PBUFFER_WIDTH, 0); // TODO: How to get the right value ?
-    _eglSetConfigKey(&conf->base, EGL_MAX_PBUFFER_HEIGHT, 0); // TODO: How to get the right value ?
-    _eglSetConfigKey(&conf->base, EGL_MAX_PBUFFER_PIXELS, 0); // TODO: How to get the right value ?
-    _eglSetConfigKey(&conf->base, EGL_SURFACE_TYPE, EGL_WINDOW_BIT /*| EGL_PIXMAP_BIT | EGL_PBUFFER_BIT*/);
+    // General configuration
+    conf->base.ConfigCaveat = EGL_NONE;
+    conf->base.ConfigID = id; // dummy
+    conf->base.NativeRenderable = EGL_TRUE; // Let's say yes
+    conf->base.RenderableType = EGL_OPENGL_BIT | EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
+    conf->base.SurfaceType = EGL_WINDOW_BIT; // EGL_PIXMAP_BIT and EGL_PBUFFER_BIT not supported
+
+    // Color buffer configuration
+    conf->base.ColorBufferType = EGL_RGB_BUFFER;
+    conf->base.RedSize = 8;
+    conf->base.BlueSize = 8;
+    conf->base.GreenSize = 8;
+    conf->base.AlphaSize = 8;
+    conf->base.BufferSize = conf->base.RedSize+conf->base.BlueSize+conf->base.GreenSize+conf->base.AlphaSize;
+
+    // Depth/stencil buffer configuration
+    conf->base.DepthSize = 24;
+    conf->base.StencilSize = 8;
+
+    // Visual
+    conf->stvis.buffer_mask = ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK;
+    conf->stvis.color_format = PIPE_FORMAT_RGBA8888_UNORM;
+    conf->stvis.depth_stencil_format = PIPE_FORMAT_Z24_UNORM_S8_UINT;
+    conf->stvis.accum_format = PIPE_FORMAT_R16G16B16A16_FLOAT;
+    conf->stvis.render_buffer = ST_ATTACHMENT_BACK_LEFT_MASK;
 
     if (!_eglValidateConfig(&conf->base, EGL_FALSE)) {
         _eglLog(_EGL_DEBUG, "Switch: failed to validate config");
-        goto cleanup;
+        free(conf);
+        return EGL_FALSE;
     }
 
     _eglLinkConfig(&conf->base);
-    if (!_eglGetArraySize(dpy->Configs)) {
-        _eglLog(_EGL_WARNING, "Switch: failed to create any config");
-        goto cleanup;
-    }
-
     return EGL_TRUE;
+}
 
-cleanup:
-    free(conf);
-    return EGL_FALSE;
+
+static EGLBoolean
+switch_add_configs_for_visuals(_EGLDisplay *dpy)
+{
+    CALLED();
+
+    // TODO: add more configs
+    return switch_add_config(dpy, 1);
 }
 
 /**
@@ -402,7 +383,6 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     if (!switch_add_configs_for_visuals(dpy))
         return EGL_FALSE;
-
 
     display = (struct switch_egl_display*) calloc(1, sizeof (*display));
     if (!display) {
@@ -513,6 +493,7 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
 {
     struct switch_egl_context *context;
     struct switch_egl_display *display = switch_egl_display(dpy);
+    struct switch_egl_config *config = switch_egl_config(conf);
     CALLED();
 
     context = (struct switch_egl_context*) calloc(1, sizeof (*context));
@@ -529,6 +510,7 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
     
     attribs.major = context->base.ClientMajorVersion;
     attribs.minor = context->base.ClientMinorVersion;
+    attribs.visual = config->stvis;
 
     switch (eglQueryAPI()) {
         case EGL_OPENGL_API:
@@ -573,7 +555,6 @@ switch_create_context(_EGLDriver *drv, _EGLDisplay *dpy, _EGLConfig *conf,
             _eglError(EGL_BAD_CONFIG, "switch_create_context");
             goto cleanup;
     }
-    switch_fill_st_visual(&attribs.visual, conf);
 
     enum st_context_error error;
     context->stctx = display->stapi->create_context(display->stapi, display->stmgr, &attribs, &error, NULL);
