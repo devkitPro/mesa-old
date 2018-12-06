@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014 Adrián Arroyo Calle <adrian.arroyocalle@gmail.com>
  * Copyright (C) 2018 Jules Blok
+ * Copyright (C) 2018-2019 fincs
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -304,7 +305,7 @@ switch_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 
 
 static EGLBoolean
-switch_add_config(_EGLDisplay *dpy, EGLint id)
+switch_add_config(_EGLDisplay *dpy, EGLint *id, enum pipe_format colorfmt, enum pipe_format depthfmt)
 {
     CALLED();
 
@@ -314,31 +315,31 @@ switch_add_config(_EGLDisplay *dpy, EGLint id)
         return _eglError(EGL_BAD_ALLOC, "switch_add_config failed to alloc");
 
     TRACE("Initializing config\n");
-    _eglInitConfig(&conf->base, dpy, id);
+    _eglInitConfig(&conf->base, dpy, ++*id);
 
     // General configuration
-    conf->base.ConfigCaveat = EGL_NONE;
-    conf->base.ConfigID = id; // dummy
-    conf->base.NativeRenderable = EGL_TRUE; // Let's say yes
+    conf->base.NativeRenderable = EGL_TRUE;
+    conf->base.SurfaceType = EGL_WINDOW_BIT; // we only support creating window surfaces
     conf->base.RenderableType = EGL_OPENGL_BIT | EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
-    conf->base.SurfaceType = EGL_WINDOW_BIT; // EGL_PIXMAP_BIT and EGL_PBUFFER_BIT not supported
+    conf->base.Conformant = conf->base.RenderableType;
+    conf->base.MinSwapInterval = 1;
+    conf->base.MaxSwapInterval = 100; // arbitrary limit
 
     // Color buffer configuration
-    conf->base.ColorBufferType = EGL_RGB_BUFFER;
-    conf->base.RedSize = 8;
-    conf->base.BlueSize = 8;
-    conf->base.GreenSize = 8;
-    conf->base.AlphaSize = 8;
-    conf->base.BufferSize = conf->base.RedSize+conf->base.BlueSize+conf->base.GreenSize+conf->base.AlphaSize;
+    conf->base.RedSize    = util_format_get_component_bits(colorfmt, UTIL_FORMAT_COLORSPACE_RGB, 0);
+    conf->base.GreenSize  = util_format_get_component_bits(colorfmt, UTIL_FORMAT_COLORSPACE_RGB, 1);
+    conf->base.BlueSize   = util_format_get_component_bits(colorfmt, UTIL_FORMAT_COLORSPACE_RGB, 2);
+    conf->base.AlphaSize  = util_format_get_component_bits(colorfmt, UTIL_FORMAT_COLORSPACE_RGB, 3);
+    conf->base.BufferSize = conf->base.RedSize+conf->base.GreenSize+conf->base.BlueSize+conf->base.AlphaSize;
 
     // Depth/stencil buffer configuration
-    conf->base.DepthSize = 24;
-    conf->base.StencilSize = 8;
+    conf->base.DepthSize   = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 0);
+    conf->base.StencilSize = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 1);
 
     // Visual
     conf->stvis.buffer_mask = ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK;
-    conf->stvis.color_format = PIPE_FORMAT_RGBA8888_UNORM;
-    conf->stvis.depth_stencil_format = PIPE_FORMAT_Z24_UNORM_S8_UINT;
+    conf->stvis.color_format = colorfmt;
+    conf->stvis.depth_stencil_format = depthfmt;
     conf->stvis.accum_format = PIPE_FORMAT_R16G16B16A16_FLOAT;
     conf->stvis.render_buffer = ST_ATTACHMENT_BACK_LEFT_MASK;
 
@@ -358,8 +359,38 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
 {
     CALLED();
 
-    // TODO: add more configs
-    return switch_add_config(dpy, 1);
+    // List of supported color buffer formats
+    static const enum pipe_format colorfmts[] = {
+        PIPE_FORMAT_R8G8B8A8_UNORM,
+
+        // TODO: Support these once we eschew the old libnx gfx api
+        //PIPE_FORMAT_R8G8B8X8_UNORM,
+        //PIPE_FORMAT_B5G6R5_UNORM,
+    };
+
+    // List of supported depth buffer formats
+    static const enum pipe_format depthfmts[] = {
+        PIPE_FORMAT_NONE,
+        PIPE_FORMAT_S8_UINT,
+        PIPE_FORMAT_Z16_UNORM,
+        PIPE_FORMAT_Z24X8_UNORM,
+        PIPE_FORMAT_Z24_UNORM_S8_UINT,
+        PIPE_FORMAT_Z32_FLOAT,
+        PIPE_FORMAT_Z32_FLOAT_S8X24_UINT,
+    };
+
+    // Add all combinations of color/depth buffer formats
+    EGLint config_id = 0;
+    EGLint i, j;
+    for (i = 0; i < sizeof(colorfmts)/sizeof(colorfmts[0]); i ++) {
+        for (j = 0; j < sizeof(depthfmts)/sizeof(depthfmts[0]); j ++) {
+            EGLBoolean rc = switch_add_config(dpy, &config_id, colorfmts[i], depthfmts[j]);
+            if (!rc)
+                return rc;
+        }
+    }
+
+    return EGL_TRUE;
 }
 
 /**
