@@ -39,10 +39,8 @@
 
 #include <switch.h>
 
-#include "target-helpers/inline_sw_helper.h"
 #include "target-helpers/inline_debug_helper.h"
 
-#include "sw/switch/switch_sw_winsys.h"
 #include "nouveau/switch/nouveau_switch_public.h"
 
 #include "pipe/p_context.h"
@@ -379,6 +377,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 {
     struct switch_egl_display *display;
     struct st_manager *stmgr;
+    struct pipe_screen *screen;
     CALLED();
 
     if (!switch_add_configs_for_visuals(dpy))
@@ -410,53 +409,20 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
     stmgr->get_param = switch_st_get_param;
 
     gfxInitDefault();
+    gfxSetMode(GfxMode_TiledDouble);
 
-    if ( dpy->Options.ForceSoftware )
+    /* Create nouveau screen */
+    TRACE("Creating nouveau screen\n");
+    screen = nouveau_switch_screen_create();
+    if (!screen)
     {
-        struct sw_winsys *winsys;
-        struct pipe_screen *screen;
-
-        /* We use a switch software winsys since we always just render to ordinary
-        * driver resources.
-        */
-        TRACE("Initializing winsys\n");
-        winsys = switch_sw_create();
-        if (!winsys)
-            return EGL_FALSE;
-
-        /* Create llvmpipe or softpipe screen */
-        TRACE("Creating sw screen\n");
-        screen = sw_screen_create(winsys);
-        if (!screen)
-        {
-            _eglError(EGL_BAD_ALLOC, "sw_screen_create");
-            winsys->destroy(winsys);
-            return EGL_FALSE;
-        }
-
-        /* Inject optional trace, debug, etc. wrappers */
-        TRACE("Wrapping screen\n");
-        stmgr->screen = debug_screen_wrap(screen);
+        TRACE("Failed to create nouveau screen\n");
+        return EGL_FALSE;
     }
-    else
-    {
-       struct pipe_screen *screen;
 
-       gfxSetMode(GfxMode_TiledDouble);
-
-        /* Create nouveau screen */
-       TRACE("Creating nouveau screen\n");
-       screen = nouveau_switch_screen_create();
-       if (!screen)
-       {
-           TRACE("Failed to create nouveau screen\n");
-           return EGL_FALSE;
-       }
-
-       /* Inject optional trace, debug, etc. wrappers */
-       TRACE("Wrapping screen\n");
-       stmgr->screen = debug_screen_wrap(screen);
-    }
+    /* Inject optional trace, debug, etc. wrappers */
+    TRACE("Wrapping screen\n");
+    stmgr->screen = debug_screen_wrap(screen);
 
     display->stmgr = stmgr;
     display->stapi = st_gl_api_create();

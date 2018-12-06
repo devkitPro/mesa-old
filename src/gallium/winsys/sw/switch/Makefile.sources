@@ -1,3 +1,0 @@
-C_SOURCES := \
-	switch_sw_winsys.c \
-	switch_sw_winsys.h

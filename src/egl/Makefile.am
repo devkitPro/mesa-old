@@ -196,12 +196,7 @@ libEGL_mesa_la_LIBADD = \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la
 if HAVE_PLATFORM_SWITCH
 libEGL_mesa_la_LIBADD += \
-	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la \
 	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la
-endif
-if HAVE_GALLIUM_SOFTPIPE
-libEGL_mesa_la_LIBADD += \
-	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
 endif
 libEGL_mesa_la_LDFLAGS = \
 	-no-undefined \
@@ -221,12 +216,7 @@ libEGL_la_LIBADD = \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la
 if HAVE_PLATFORM_SWITCH
 libEGL_la_LIBADD += \
-	$(top_builddir)/src/gallium/winsys/sw/switch/libsw_switch.la \
 	$(top_builddir)/src/gallium/winsys/nouveau/switch/libnouveauswitch.la
-endif
-if HAVE_GALLIUM_SOFTPIPE
-libEGL_la_LIBADD += \
-	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la
 endif
 libEGL_la_LDFLAGS = \
 	-no-undefined \
