@@ -137,6 +137,10 @@ _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
 #ifdef HAVE_HAIKU_PLATFORM
       return _EGL_PLATFORM_HAIKU;
 #endif
+
+#ifdef HAVE_SWITCH_PLATFORM
+      return _EGL_PLATFORM_SWITCH;
+#endif
    }
 
    return _EGL_INVALID_PLATFORM;
