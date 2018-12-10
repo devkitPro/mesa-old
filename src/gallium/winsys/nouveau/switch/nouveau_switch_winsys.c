@@ -114,7 +114,7 @@ nouveau_switch_resource_get_syncpoint(struct pipe_resource *resource, unsigned i
 }
 
 PUBLIC int
-nouveau_switch_resource_get_buffer(struct pipe_screen *screen, struct pipe_resource *resource, NvGraphicBuffer *buffer)
+nouveau_switch_resource_get_buffer(struct pipe_resource *resource, NvGraphicBuffer *buffer)
 {
 	struct winsys_handle whandle = {0};
 
@@ -124,7 +124,7 @@ nouveau_switch_resource_get_buffer(struct pipe_screen *screen, struct pipe_resou
 	}
 
 	whandle.type = WINSYS_HANDLE_TYPE_SHARED;
-	if (!screen->resource_get_handle(screen, NULL, resource, &whandle, 0)) {
+	if (!resource->screen->resource_get_handle(resource->screen, NULL, resource, &whandle, 0)) {
 		debug_printf("%s: resource_get_handle failed\n", __func__);
 		return -2;
 	}

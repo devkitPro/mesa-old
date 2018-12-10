@@ -8,6 +8,6 @@ struct pipe_resource;
 
 struct pipe_screen *nouveau_switch_screen_create(void);
 int nouveau_switch_resource_get_syncpoint(struct pipe_resource *resource, unsigned int *out_threshold);
-int nouveau_switch_resource_get_buffer(struct pipe_screen *screen, struct pipe_resource *resource, NvGraphicBuffer *buffer);
+int nouveau_switch_resource_get_buffer(struct pipe_resource *resource, NvGraphicBuffer *buffer);
 
 #endif
