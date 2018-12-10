@@ -105,21 +105,16 @@ struct switch_framebuffer
    struct st_framebuffer_iface base;
    struct switch_egl_display* display;
    struct switch_egl_surface* surface;
+   struct pipe_resource template;
 };
 
+static inline struct switch_framebuffer *
+switch_framebuffer(struct st_framebuffer_iface *stfbi)
+{
+    return (struct switch_framebuffer *)stfbi;
+}
+
 static uint32_t drifb_ID = 0;
-
-static inline struct switch_egl_display *
-stfbi_to_display(struct st_framebuffer_iface *stfbi)
-{
-    return ((struct switch_framebuffer *)stfbi)->display;
-}
-
-static inline struct switch_egl_surface *
-stfbi_to_surface(struct st_framebuffer_iface *stfbi)
-{
-    return ((struct switch_framebuffer *)stfbi)->surface;
-}
 
 static boolean
 switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
@@ -133,26 +128,11 @@ static boolean
 switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    const enum st_attachment_type *statts, unsigned count, struct pipe_resource **out)
 {
-    struct switch_egl_surface *surface = stfbi_to_surface(stfbi);
+    struct switch_framebuffer *fb = switch_framebuffer(stfbi);
+    struct switch_egl_surface *surface = fb->surface;
     struct pipe_screen *screen = stfbi->state_manager->screen;
     enum st_attachment_type i;
-    struct pipe_resource templat;
-    u32 width, height;
     CALLED();
-
-    gfxGetFramebufferResolution(&width, &height);
-
-    memset(&templat, 0, sizeof(templat));
-    templat.target = PIPE_TEXTURE_RECT;
-    templat.format = 0; /* setup below */
-    templat.last_level = 0;
-    templat.width0 = (u16)width;
-    templat.height0 = (u16)height;
-    templat.depth0 = 1;
-    templat.array_size = 1;
-    templat.usage = PIPE_USAGE_DEFAULT;
-    templat.bind = 0; /* setup below */
-    templat.flags = 0;
 
     for (i = 0; i < count; i++)
     {
@@ -164,7 +144,7 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
         if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
         {
             u32 index = (statts[i] == ST_ATTACHMENT_FRONT_LEFT) ? 1 : 0;
-            format = surface->stfbi->visual->color_format;
+            format = stfbi->visual->color_format;
             bind = PIPE_BIND_RENDER_TARGET;
             whandle.type = WINSYS_HANDLE_TYPE_SHARED;
             whandle.handle = gfxGetFramebufferHandle(index, &whandle.offset);
@@ -172,24 +152,24 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
         }
         else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
         {
-            format = surface->stfbi->visual->depth_stencil_format;
+            format = stfbi->visual->depth_stencil_format;
             bind = PIPE_BIND_DEPTH_STENCIL;
         }
         else if (statts[i] == ST_ATTACHMENT_ACCUM)
         {
-            format = surface->stfbi->visual->accum_format;
+            format = stfbi->visual->accum_format;
             bind = PIPE_BIND_RENDER_TARGET;
         }
 
-        templat.format = format;
-        templat.bind = bind;
+        fb->template.format = format;
+        fb->template.bind = bind;
         res = surface->textures[statts[i]];
         if (!res)
         {
             if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
-                res = screen->resource_from_handle(screen, &templat, &whandle, 0);
+                res = screen->resource_from_handle(screen, &fb->template, &whandle, 0);
             else
-                res = screen->resource_create(screen, &templat);
+                res = screen->resource_create(screen, &fb->template);
             surface->textures[statts[i]] = res;
         }
         if (pipe_reference(&out[i]->reference, &res->reference)) {
@@ -218,6 +198,7 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     struct switch_framebuffer *fb;
     struct switch_egl_display *display = switch_egl_display(dpy);
     struct switch_egl_config *config = switch_egl_config(conf);
+    u32 width, height;
     CALLED();
 
     surface = (struct switch_egl_surface*) calloc(1, sizeof (*surface));
@@ -240,8 +221,17 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
         goto cleanup;
     }
 
+    gfxGetFramebufferResolution(&width, &height);
+
     fb->display = display;
     fb->surface = surface;
+    fb->template.target = PIPE_TEXTURE_RECT;
+    fb->template.width0 = (u16)width;
+    fb->template.height0 = (u16)height;
+    fb->template.depth0 = 1;
+    fb->template.array_size = 1;
+    fb->template.usage = PIPE_USAGE_DEFAULT;
+
     surface->stfbi = &fb->base;
     surface->base.SwapInterval = 1;
     surface->fences[0].id = UINT32_MAX;
@@ -399,8 +389,8 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
 static int
 switch_st_get_param(struct st_manager *stmgr, enum st_manager_param param)
 {
-   /* no-op */
-   return 0;
+    /* no-op */
+    return 0;
 }
 
 static EGLBoolean
