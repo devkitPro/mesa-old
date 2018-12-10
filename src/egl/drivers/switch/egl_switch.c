@@ -61,6 +61,7 @@
 
 #include "mapi/glapi/glapi.h"
 
+#define NUM_BUFFERS 3
 
 #ifdef DEBUG
 #	define TRACE(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)
@@ -95,9 +96,12 @@ struct switch_egl_surface
 {
     _EGLSurface base;
     struct st_framebuffer_iface *stfbi;
-    struct pipe_resource *textures[ST_ATTACHMENT_COUNT];
-    NvFence fences[2];
-    bool fence_swap;
+    struct pipe_resource *attachments[ST_ATTACHMENT_COUNT];
+
+    NWindow* nw;
+    s32 cur_slot;
+    struct pipe_resource *buffers[NUM_BUFFERS];
+    NvFence fences[NUM_BUFFERS];
 };
 
 struct switch_framebuffer
@@ -114,16 +118,87 @@ switch_framebuffer(struct st_framebuffer_iface *stfbi)
     return (struct switch_framebuffer *)stfbi;
 }
 
+//-----------------------------------------------------------------------------
+// Default window, used to shim users of the old libnx gfx API.
+// This section is scheduled to be removed in the future.
+//-----------------------------------------------------------------------------
+
+static u32 s_defaultWidth = 1280, s_defaultHeight = 720;
+static ViDisplay s_viDisplay;
+static ViLayer s_viLayer;
+static NWindow s_defaultWin;
+
+static void switch_init_default_window(void)
+{
+    Result rc;
+    rc = viInitialize(ViServiceType_Default);
+    if (R_FAILED(rc)) fatalSimple(rc);
+    rc = viOpenDefaultDisplay(&s_viDisplay);
+    if (R_FAILED(rc)) fatalSimple(rc);
+    rc = viCreateLayer(&s_viDisplay, &s_viLayer);
+    if (R_FAILED(rc)) fatalSimple(rc);
+    rc = viSetLayerScalingMode(&s_viLayer, ViScalingMode_FitToLayer);
+    if (R_FAILED(rc)) fatalSimple(rc);
+    rc = nwindowCreateFromLayer(&s_defaultWin, &s_viLayer);
+    if (R_FAILED(rc)) fatalSimple(rc);
+    rc = nwindowSetDimensions(&s_defaultWin, s_defaultWidth, s_defaultHeight);
+    if (R_FAILED(rc)) fatalSimple(rc);
+}
+
+static void switch_destroy_default_window(void)
+{
+    nwindowClose(&s_defaultWin);
+    viCloseLayer(&s_viLayer);
+    viCloseDisplay(&s_viDisplay);
+    viExit();
+}
+
+// Shims for gfx functions
+
+void gfxInitResolution(u32 width, u32 height)
+{
+    s_defaultWidth = width;
+    s_defaultHeight = height;
+}
+
+void gfxInitResolutionDefault(void)
+{
+    gfxInitResolution(1920, 1080);
+}
+
+void gfxConfigureCrop(s32 left, s32 top, s32 right, s32 bottom)
+{
+    nwindowSetCrop(&s_defaultWin, left, top, right, bottom);
+}
+
+void gfxConfigureResolution(s32 width, s32 height)
+{
+    gfxConfigureCrop(0, 0, width, height);
+}
+
+void gfxConfigureTransform(u32 transform)
+{
+    nwindowSetTransform(&s_defaultWin, transform);
+}
+
+//-----------------------------------------------------------------------------
+// switch_framebuffer methods
+//-----------------------------------------------------------------------------
+
 static uint32_t drifb_ID = 0;
 
+// Called via st_manager_flush_frontbuffer. Users of this function include:
+// - st_context_flush with ST_FLUSH_FRONT
+// - glFlush
+// - glFinish
+// We don't support rendering to the front buffer, so our implementation is dummy.
 static boolean
-switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
-                   enum st_attachment_type statt)
+switch_st_framebuffer_flush_front(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi, enum st_attachment_type statt)
 {
-    // TODO: Figure out if we need to implement this at all.
     return TRUE;
 }
 
+// Called via st_framebuffer_validate.
 static boolean
 switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi,
                    const enum st_attachment_type *statts, unsigned count, struct pipe_resource **out)
@@ -136,60 +211,95 @@ switch_st_framebuffer_validate(struct st_context_iface *stctx, struct st_framebu
 
     for (i = 0; i < count; i++)
     {
-        enum pipe_format format = PIPE_FORMAT_NONE;
-        unsigned bind = 0;
-        struct winsys_handle whandle;
-        struct pipe_resource* res;
-
-        if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
-        {
-            u32 index = (statts[i] == ST_ATTACHMENT_FRONT_LEFT) ? 1 : 0;
-            format = stfbi->visual->color_format;
-            bind = PIPE_BIND_RENDER_TARGET;
-            whandle.type = WINSYS_HANDLE_TYPE_SHARED;
-            whandle.handle = gfxGetFramebufferHandle(index, &whandle.offset);
-            whandle.stride = gfxGetFramebufferPitch();
-        }
-        else if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
-        {
-            format = stfbi->visual->depth_stencil_format;
-            bind = PIPE_BIND_DEPTH_STENCIL;
-        }
-        else if (statts[i] == ST_ATTACHMENT_ACCUM)
-        {
-            format = stfbi->visual->accum_format;
-            bind = PIPE_BIND_RENDER_TARGET;
-        }
-
-        fb->template.format = format;
-        fb->template.bind = bind;
-        res = surface->textures[statts[i]];
+        struct pipe_resource* res = surface->attachments[statts[i]];
         if (!res)
         {
-            if (statts[i] == ST_ATTACHMENT_FRONT_LEFT || statts[i] == ST_ATTACHMENT_BACK_LEFT)
-                res = screen->resource_from_handle(screen, &fb->template, &whandle, 0);
-            else
-                res = screen->resource_create(screen, &fb->template);
-            surface->textures[statts[i]] = res;
+            switch (statts[i])
+            {
+                case ST_ATTACHMENT_BACK_LEFT:
+                {
+                    Result rc = nwindowDequeueBuffer(surface->nw, &surface->cur_slot, NULL);
+                    if (R_FAILED(rc)) fatalSimple(rc);
+
+                    // Use the dequeued buffer as the back buffer
+                    res = surface->buffers[surface->cur_slot];
+                    break;
+                }
+                case ST_ATTACHMENT_DEPTH_STENCIL:
+                case ST_ATTACHMENT_ACCUM:
+                {
+                    // Configure format/bind parameters
+                    if (statts[i] == ST_ATTACHMENT_DEPTH_STENCIL)
+                    {
+                        fb->template.format = stfbi->visual->depth_stencil_format;
+                        fb->template.bind = PIPE_BIND_DEPTH_STENCIL;
+                    } else if (statts[i] == ST_ATTACHMENT_ACCUM)
+                    {
+                        fb->template.format = stfbi->visual->accum_format;
+                        fb->template.bind = PIPE_BIND_RENDER_TARGET;
+                    }
+
+                    // Create the requested resource
+                    res = screen->resource_create(screen, &fb->template);
+                    break;
+                }
+                default:
+                    break;
+            }
+
+            // Register the attachment for future calls
+            surface->attachments[statts[i]] = res;
         }
-        if (pipe_reference(&out[i]->reference, &res->reference)) {
-            screen->resource_destroy(screen, out[i]);
-        }
-        out[i] = res;
+        pipe_resource_reference(&out[i], res);
     }
 
     return TRUE;
 }
 
+// Called via st_manager_flush_swapbuffers, which itself is only used during glFinish.
+// We don't actually want to swap the buffers during glFinish, so our implementation is dummy.
 static boolean
 switch_st_framebuffer_flush_swapbuffers(struct st_context_iface *stctx, struct st_framebuffer_iface *stfbi)
 {
     return TRUE;
 }
 
-/**
- * Called via eglCreateWindowSurface(), drv->API.CreateWindowSurface().
- */
+//-----------------------------------------------------------------------------
+// EGL driver methods
+//-----------------------------------------------------------------------------
+
+static void
+switch_egl_surface_cleanup(struct switch_egl_surface *surface)
+{
+    u32 i;
+
+    for (i = 0; i < ST_ATTACHMENT_COUNT; i ++)
+    {
+        if (i == ST_ATTACHMENT_FRONT_LEFT || i == ST_ATTACHMENT_BACK_LEFT)
+            continue;
+        pipe_resource_reference(&surface->attachments[i], NULL);
+    }
+
+    if (surface->nw)
+    {
+        if (surface->cur_slot >= 0)
+            nwindowCancelBuffer(surface->nw, surface->cur_slot, NULL);
+        nwindowReleaseBuffers(surface->nw);
+
+        if (surface->nw == &s_defaultWin)
+            switch_destroy_default_window();
+    }
+
+    for (i = 0; i < NUM_BUFFERS; i ++)
+        pipe_resource_reference(&surface->buffers[i], NULL);
+
+    if (surface->stfbi)
+        free(surface->stfbi);
+
+    free(surface);
+}
+
+// Called via eglCreateWindowSurface(), drv->API.CreateWindowSurface().
 static _EGLSurface *
 switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     _EGLConfig *conf, void *native_window, const EGLint *attrib_list)
@@ -198,46 +308,82 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     struct switch_framebuffer *fb;
     struct switch_egl_display *display = switch_egl_display(dpy);
     struct switch_egl_config *config = switch_egl_config(conf);
-    u32 width, height;
+    u32 width, height, i;
     CALLED();
 
     surface = (struct switch_egl_surface*) calloc(1, sizeof (*surface));
     if (!surface)
     {
-        _eglError(EGL_BAD_ALLOC, "switch_create_window_surface");
+        _eglError(EGL_BAD_ALLOC, "switch_create_window_surface: failed to allocate switch_egl_surface");
         return NULL;
     }
 
-    if (!_eglInitSurface(&surface->base, dpy, EGL_WINDOW_BIT,
-        conf, attrib_list))
-    {
+    if (!_eglInitSurface(&surface->base, dpy, EGL_WINDOW_BIT, conf, attrib_list))
         goto cleanup;
-    }
 
     fb = (struct switch_framebuffer *) calloc(1, sizeof (*fb));
     if (!fb)
     {
-        _eglError(EGL_BAD_ALLOC, "switch_create_window_surface");
+        _eglError(EGL_BAD_ALLOC, "switch_create_window_surface: failed to allocate switch_framebuffer");
         goto cleanup;
     }
 
-    gfxGetFramebufferResolution(&width, &height);
+    // Use the specified native window, and check its validity
+    surface->nw = (NWindow*)native_window;
+    if (!nwindowIsValid(surface->nw))
+    {
+        // We were passed an invalid native window, so attempt to use the default window shim
+        if (nwindowIsValid(&s_defaultWin))
+        {
+            // The default window is already used by another surface, so error out cleanly
+            _eglError(EGL_BAD_NATIVE_WINDOW, "switch_create_window_surface: not a valid native window reference");
+            goto cleanup;
+        }
+        switch_init_default_window();
+        surface->nw = &s_defaultWin;
+    }
 
+    // Allocate framebuffers and attach them to the native window
+    nwindowGetDimensions(surface->nw, &width, &height);
     fb->display = display;
     fb->surface = surface;
     fb->template.target = PIPE_TEXTURE_RECT;
+    fb->template.format = config->stvis.color_format;
     fb->template.width0 = (u16)width;
     fb->template.height0 = (u16)height;
     fb->template.depth0 = 1;
     fb->template.array_size = 1;
     fb->template.usage = PIPE_USAGE_DEFAULT;
+    fb->template.bind = PIPE_BIND_RENDER_TARGET;
+    for (i = 0; i < NUM_BUFFERS; i ++)
+    {
+        // Allocate a framebuffer
+        surface->fences[i].id = UINT32_MAX;
+        surface->buffers[i] = display->stmgr->screen->resource_create(display->stmgr->screen, &fb->template);
+        if (!surface->buffers[i])
+        {
+            _eglError(EGL_BAD_ALLOC, "switch_create_window_surface: failed to allocate framebuffers");
+            goto cleanup;
+        }
+
+        // Retrieve the native graphic buffer struct associated with this framebuffer
+        NvGraphicBuffer grbuf;
+        int err = nouveau_switch_resource_get_buffer(surface->buffers[i], &grbuf);
+        if (err != 0)
+        {
+            _eglError(EGL_BAD_ALLOC, "switch_create_window_surface: nouveau_switch_resource_get_buffer failed");
+            goto cleanup;
+        }
+
+        // Attach the framebuffer to the native window
+        Result rc = nwindowConfigureBuffer(surface->nw, i, &grbuf);
+        if (R_FAILED(rc)) fatalSimple(rc);
+    }
 
     surface->stfbi = &fb->base;
-    surface->base.SwapInterval = 1;
-    surface->fences[0].id = UINT32_MAX;
-    surface->fences[1].id = UINT32_MAX;
+    surface->cur_slot = -1;
 
-    /* setup the st_framebuffer_iface */
+    // Setup the st_framebuffer_iface
     fb->base.visual = &config->stvis;
     fb->base.flush_front = switch_st_framebuffer_flush_front;
     fb->base.validate = switch_st_framebuffer_validate;
@@ -249,7 +395,7 @@ switch_create_window_surface(_EGLDriver *drv, _EGLDisplay *dpy,
     return &surface->base;
 
 cleanup:
-    free(surface);
+    switch_egl_surface_cleanup(surface);
     return NULL;
 }
 
@@ -275,21 +421,12 @@ switch_create_pbuffer_surface(_EGLDriver *drv, _EGLDisplay *disp,
 static EGLBoolean
 switch_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
-    enum st_attachment_type i;
     struct switch_egl_surface* surface = switch_egl_surface(surf);
-    struct pipe_screen *screen = surface->stfbi->state_manager->screen;
     CALLED();
 
-    if (_eglPutSurface(surf)) {
-        for (i = 0; i < ST_ATTACHMENT_COUNT; i ++) {
-            if (pipe_reference(&surface->textures[i]->reference, NULL)) {
-                screen->resource_destroy(screen, surface->textures[i]);
-            }
-        }
-        // XXX: detach switch_egl_surface::gl from the native window and destroy it
-        free(surface->stfbi);
-        free(surface);
-    }
+    if (_eglPutSurface(surf))
+        switch_egl_surface_cleanup(surface);
+
     return EGL_TRUE;
 }
 
@@ -312,8 +449,8 @@ switch_add_config(_EGLDisplay *dpy, EGLint *id, enum pipe_format colorfmt, enum 
     conf->base.SurfaceType = EGL_WINDOW_BIT; // we only support creating window surfaces
     conf->base.RenderableType = EGL_OPENGL_BIT | EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
     conf->base.Conformant = conf->base.RenderableType;
-    conf->base.MinSwapInterval = 1;
-    conf->base.MaxSwapInterval = 100; // arbitrary limit
+    conf->base.MinSwapInterval = 0;
+    conf->base.MaxSwapInterval = INT32_MAX;
 
     // Color buffer configuration
     conf->base.RedSize    = util_format_get_component_bits(colorfmt, UTIL_FORMAT_COLORSPACE_RGB, 0);
@@ -352,8 +489,6 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
     // List of supported color buffer formats
     static const enum pipe_format colorfmts[] = {
         PIPE_FORMAT_R8G8B8A8_UNORM,
-
-        // TODO: Support these once we eschew the old libnx gfx api
         //PIPE_FORMAT_R8G8B8X8_UNORM,
         //PIPE_FORMAT_B5G6R5_UNORM,
     };
@@ -383,13 +518,11 @@ switch_add_configs_for_visuals(_EGLDisplay *dpy)
     return EGL_TRUE;
 }
 
-/**
- * Called from the ST manager.
- */
+// Called from st_api_create_context. This is only ever used for detecting
+// whether the ST_MANAGER_BROKEN_INVALIDATE workaround is required.
 static int
 switch_st_get_param(struct st_manager *stmgr, enum st_manager_param param)
 {
-    /* no-op */
     return 0;
 }
 
@@ -429,10 +562,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
 
     stmgr->get_param = switch_st_get_param;
 
-    gfxInitDefault();
-    gfxSetMode(GfxMode_TiledDouble);
-
-    /* Create nouveau screen */
+    // Create nouveau screen
     TRACE("Creating nouveau screen\n");
     screen = nouveau_switch_screen_create();
     if (!screen)
@@ -441,7 +571,7 @@ switch_initialize(_EGLDriver *drv, _EGLDisplay *dpy)
         return EGL_FALSE;
     }
 
-    /* Inject optional trace, debug, etc. wrappers */
+    // Inject optional trace/debug/etc wrappers
     TRACE("Wrapping screen\n");
     stmgr->screen = debug_screen_wrap(screen);
 
@@ -457,7 +587,7 @@ switch_terminate(_EGLDriver* drv, _EGLDisplay* dpy)
     struct switch_egl_display *display = switch_egl_display(dpy);
     CALLED();
 
-    /* Release all non-current Context/Surfaces. */
+    // Release all non-current Context/Surfaces
     _eglReleaseDisplayResources(drv, dpy);
 
     _eglCleanupDisplay(dpy);
@@ -466,8 +596,6 @@ switch_terminate(_EGLDriver* drv, _EGLDisplay* dpy)
 
     display->stmgr->screen->destroy(display->stmgr->screen);
     free(display->stmgr);
-
-    gfxExit();
     free(display);
 
     return EGL_TRUE;
@@ -606,6 +734,18 @@ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
     return ret;
 }
 
+
+static EGLBoolean
+switch_swap_interval(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf, EGLint interval)
+{
+    CALLED();
+    struct switch_egl_surface* surface = switch_egl_surface(surf);
+
+    nwindowSetSwapInterval(surface->nw, interval);
+    return EGL_TRUE;
+}
+
+
 static EGLBoolean
 switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
@@ -613,31 +753,35 @@ switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
     struct switch_egl_surface* surface = switch_egl_surface(surf);
     struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
 
+    if (surface->cur_slot < 0) {
+        TRACE("Nothing to do\n");
+        return EGL_TRUE;
+    }
+
     TRACE("Flushing context\n");
     context->stctx->flush(context->stctx, ST_FLUSH_END_OF_FRAME, NULL);
 
+    NvMultiFence mf = {0};
     NvFence fence;
-    struct pipe_resource *old_back = surface->textures[ST_ATTACHMENT_BACK_LEFT];
+    struct pipe_resource *old_back = surface->attachments[ST_ATTACHMENT_BACK_LEFT];
     fence.id = nouveau_switch_resource_get_syncpoint(old_back, &fence.value);
     if ((int)fence.id >= 0) {
-        NvFence* surf_fence = &surface->fences[surface->fence_swap];
+        NvFence* surf_fence = &surface->fences[surface->cur_slot];
         if (surf_fence->id != fence.id || surf_fence->value != fence.value) {
-            TRACE("Appending fence: {%d,%u}\n", (int)fence.id, fence.value);
+            TRACE("Using fence: {%d,%u}\n", (int)fence.id, fence.value);
             *surf_fence = fence;
-
-            NvMultiFence mf;
             nvMultiFenceCreate(&mf, &fence);
-            gfxAppendFence(&mf);
         }
     }
 
-    TRACE("Swapping out buffers\n");
-    gfxSwapBuffers();
+    TRACE("Queuing buffer\n");
+    Result rc = nwindowQueueBuffer(surface->nw, surface->cur_slot, &mf);
+    if (R_FAILED(rc)) fatalSimple(rc);
 
-    // Swap buffer attachments and invalidate framebuffer
-    surface->fence_swap = !surface->fence_swap;
-    surface->textures[ST_ATTACHMENT_BACK_LEFT] = surface->textures[ST_ATTACHMENT_FRONT_LEFT];
-    surface->textures[ST_ATTACHMENT_FRONT_LEFT] = old_back;
+    // Update framebuffer state
+    surface->cur_slot = -1;
+    surface->attachments[ST_ATTACHMENT_BACK_LEFT] = NULL;
+    surface->attachments[ST_ATTACHMENT_FRONT_LEFT] = old_back;
     p_atomic_inc(&surface->stfbi->stamp);
     return EGL_TRUE;
 }
@@ -671,7 +815,7 @@ _eglInitDriver(_EGLDriver *driver)
     driver->API.CreatePixmapSurface = switch_create_pixmap_surface;
     driver->API.CreatePbufferSurface = switch_create_pbuffer_surface;
     driver->API.DestroySurface = switch_destroy_surface;
-    driver->API.GetProcAddress = switch_get_proc_address;
-
+    driver->API.SwapInterval = switch_swap_interval;
     driver->API.SwapBuffers = switch_swap_buffers;
+    driver->API.GetProcAddress = switch_get_proc_address;
 }
