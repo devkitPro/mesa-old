@@ -124,9 +124,11 @@ bool
 nouveau_screen_bo_get_handle(struct pipe_screen *pscreen,
                              struct nouveau_bo *bo,
                              unsigned stride,
+                             unsigned offset,
                              struct winsys_handle *whandle)
 {
    whandle->stride = stride;
+   whandle->offset = offset;
 
    if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
       return nouveau_bo_name_get(bo, &whandle->handle) == 0;

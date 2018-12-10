@@ -184,16 +184,18 @@ nv50_miptree_get_handle(struct pipe_screen *pscreen,
                         struct winsys_handle *whandle)
 {
    struct nv50_miptree *mt = nv50_miptree(pt);
-   unsigned stride;
+   unsigned stride, offset;
 
    if (!mt || !mt->base.bo)
       return false;
 
    stride = mt->level[0].pitch;
+   offset = mt->level[0].offset;
 
    return nouveau_screen_bo_get_handle(pscreen,
                                        mt->base.bo,
                                        stride,
+                                       offset,
                                        whandle);
 }
 

@@ -131,6 +131,7 @@ bool
 nouveau_screen_bo_get_handle(struct pipe_screen *pscreen,
                              struct nouveau_bo *bo,
                              unsigned stride,
+                             unsigned offset,
                              struct winsys_handle *whandle);
 struct nouveau_bo *
 nouveau_screen_bo_from_handle(struct pipe_screen *pscreen,
