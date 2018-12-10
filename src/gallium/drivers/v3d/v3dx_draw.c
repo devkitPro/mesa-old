@@ -119,17 +119,25 @@ v3d_start_draw(struct v3d_context *v3d)
 }
 
 static void
-v3d_predraw_check_textures(struct pipe_context *pctx,
-                           struct v3d_texture_stateobj *stage_tex)
+v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
+                               enum pipe_shader_type s)
 {
         struct v3d_context *v3d = v3d_context(pctx);
 
-        for (int i = 0; i < stage_tex->num_textures; i++) {
-                struct pipe_sampler_view *view = stage_tex->textures[i];
+        /* Flush writes to textures we're sampling. */
+        for (int i = 0; i < v3d->tex[s].num_textures; i++) {
+                struct pipe_sampler_view *view = v3d->tex[s].textures[i];
                 if (!view)
                         continue;
 
                 v3d_flush_jobs_writing_resource(v3d, view->texture);
+        }
+
+        /* Flush writes to UBOs. */
+        foreach_bit(i, v3d->constbuf[s].enabled_mask) {
+                struct pipe_constant_buffer *cb = &v3d->constbuf[s].cb[i];
+                if (cb->buffer)
+                        v3d_flush_jobs_writing_resource(v3d, cb->buffer);
         }
 }
 
@@ -146,16 +154,13 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
         /* Upload the uniforms to the indirect CL first */
         struct v3d_cl_reloc fs_uniforms =
                 v3d_write_uniforms(v3d, v3d->prog.fs,
-                                   &v3d->constbuf[PIPE_SHADER_FRAGMENT],
-                                   &v3d->fragtex);
+                                   PIPE_SHADER_FRAGMENT);
         struct v3d_cl_reloc vs_uniforms =
                 v3d_write_uniforms(v3d, v3d->prog.vs,
-                                   &v3d->constbuf[PIPE_SHADER_VERTEX],
-                                   &v3d->verttex);
+                                   PIPE_SHADER_VERTEX);
         struct v3d_cl_reloc cs_uniforms =
                 v3d_write_uniforms(v3d, v3d->prog.cs,
-                                   &v3d->constbuf[PIPE_SHADER_VERTEX],
-                                   &v3d->verttex);
+                                   PIPE_SHADER_VERTEX);
 
         /* See GFXH-930 workaround below */
         uint32_t num_elements_to_emit = MAX2(vtx->num_elements, 1);
@@ -192,21 +197,27 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                 shader.fragment_shader_propagate_nans = true;
 
                 shader.coordinate_shader_code_address =
-                        cl_address(v3d->prog.cs->bo, 0);
+                        cl_address(v3d_resource(v3d->prog.cs->resource)->bo,
+                                   v3d->prog.cs->offset);
                 shader.vertex_shader_code_address =
-                        cl_address(v3d->prog.vs->bo, 0);
+                        cl_address(v3d_resource(v3d->prog.vs->resource)->bo,
+                                   v3d->prog.vs->offset);
                 shader.fragment_shader_code_address =
-                        cl_address(v3d->prog.fs->bo, 0);
+                        cl_address(v3d_resource(v3d->prog.fs->resource)->bo,
+                                   v3d->prog.fs->offset);
 
                 /* XXX: Use combined input/output size flag in the common
                  * case.
                  */
-                shader.coordinate_shader_has_separate_input_and_output_vpm_blocks = true;
-                shader.vertex_shader_has_separate_input_and_output_vpm_blocks = true;
+                shader.coordinate_shader_has_separate_input_and_output_vpm_blocks =
+                        v3d->prog.cs->prog_data.vs->separate_segments;
+                shader.vertex_shader_has_separate_input_and_output_vpm_blocks =
+                        v3d->prog.vs->prog_data.vs->separate_segments;
+
                 shader.coordinate_shader_input_vpm_segment_size =
-                        MAX2(v3d->prog.cs->prog_data.vs->vpm_input_size, 1);
+                        v3d->prog.cs->prog_data.vs->vpm_input_size;
                 shader.vertex_shader_input_vpm_segment_size =
-                        MAX2(v3d->prog.vs->prog_data.vs->vpm_input_size, 1);
+                        v3d->prog.vs->prog_data.vs->vpm_input_size;
 
                 shader.coordinate_shader_output_vpm_segment_size =
                         v3d->prog.cs->prog_data.vs->vpm_output_size;
@@ -259,7 +270,8 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                         v3d->prog.vs->prog_data.vs->uses_iid;
 
                 shader.address_of_default_attribute_values =
-                        cl_address(vtx->default_attribute_values, 0);
+                        cl_address(v3d_resource(vtx->defaults)->bo,
+                                   vtx->defaults_offset);
         }
 
         for (int i = 0; i < vtx->num_elements; i++) {
@@ -431,8 +443,8 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         /* Before setting up the draw, flush anything writing to the textures
          * that we read from.
          */
-        v3d_predraw_check_textures(pctx, &v3d->verttex);
-        v3d_predraw_check_textures(pctx, &v3d->fragtex);
+        for (int s = 0; s < PIPE_SHADER_TYPES; s++)
+                v3d_predraw_check_stage_inputs(pctx, s);
 
         struct v3d_job *job = v3d_get_job_for_fbo(v3d);
 
@@ -444,7 +456,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          * on the last submitted render, rather than tracking the last
          * rendering to each texture's BO.
          */
-        if (v3d->verttex.num_textures) {
+        if (v3d->tex[PIPE_SHADER_VERTEX].num_textures) {
                 perf_debug("Blocking binner on last render "
                            "due to vertex texturing.\n");
                 job->submit.in_sync_bcl = v3d->out_sync;

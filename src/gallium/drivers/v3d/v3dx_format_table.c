@@ -65,6 +65,8 @@ static const struct v3d_format format_table[] = {
         FORMAT(B8G8R8X8_SRGB,     SRGB8_ALPHA8, RGBA8,       SWIZ_ZYX1, 16, 0),
         FORMAT(R8G8B8A8_UNORM,    RGBA8,        RGBA8,       SWIZ_XYZW, 16, 0),
         FORMAT(R8G8B8X8_UNORM,    RGBA8,        RGBA8,       SWIZ_XYZ1, 16, 0),
+        FORMAT(R8G8B8A8_SRGB,     SRGB8_ALPHA8, RGBA8,       SWIZ_XYZW, 16, 0),
+        FORMAT(R8G8B8X8_SRGB,     SRGB8_ALPHA8, RGBA8,       SWIZ_XYZ1, 16, 0),
         FORMAT(R8G8B8A8_SNORM,    NO,           RGBA8_SNORM, SWIZ_XYZW, 16, 0),
         FORMAT(R8G8B8X8_SNORM,    NO,           RGBA8_SNORM, SWIZ_XYZ1, 16, 0),
         FORMAT(R10G10B10A2_UNORM, RGB10_A2,     RGB10_A2,    SWIZ_XYZW, 16, 0),
@@ -314,5 +316,36 @@ v3dX(get_internal_type_bpp_for_output_format)(uint32_t format,
                 *type = V3D_INTERNAL_TYPE_8;
                 *bpp = V3D_INTERNAL_BPP_32;
                 break;
+        }
+}
+
+bool
+v3dX(tfu_supports_tex_format)(enum V3DX(Texture_Data_Formats) format)
+{
+        switch (format) {
+        case TEXTURE_DATA_FORMAT_R8:
+        case TEXTURE_DATA_FORMAT_R8_SNORM:
+        case TEXTURE_DATA_FORMAT_RG8:
+        case TEXTURE_DATA_FORMAT_RG8_SNORM:
+        case TEXTURE_DATA_FORMAT_RGBA8:
+        case TEXTURE_DATA_FORMAT_RGBA8_SNORM:
+        case TEXTURE_DATA_FORMAT_RGB565:
+        case TEXTURE_DATA_FORMAT_RGBA4:
+        case TEXTURE_DATA_FORMAT_RGB5_A1:
+        case TEXTURE_DATA_FORMAT_RGB10_A2:
+        case TEXTURE_DATA_FORMAT_R16:
+        case TEXTURE_DATA_FORMAT_R16_SNORM:
+        case TEXTURE_DATA_FORMAT_RG16:
+        case TEXTURE_DATA_FORMAT_RG16_SNORM:
+        case TEXTURE_DATA_FORMAT_RGBA16:
+        case TEXTURE_DATA_FORMAT_RGBA16_SNORM:
+        case TEXTURE_DATA_FORMAT_R16F:
+        case TEXTURE_DATA_FORMAT_RG16F:
+        case TEXTURE_DATA_FORMAT_RGBA16F:
+        case TEXTURE_DATA_FORMAT_R11F_G11F_B10F:
+        case TEXTURE_DATA_FORMAT_R4:
+                return true;
+        default:
+                return false;
         }
 }

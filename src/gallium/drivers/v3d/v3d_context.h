@@ -143,7 +143,8 @@ struct v3d_uncompiled_shader {
 };
 
 struct v3d_compiled_shader {
-        struct v3d_bo *bo;
+        struct pipe_resource *resource;
+        uint32_t offset;
 
         union {
                 struct v3d_prog_data *base;
@@ -185,7 +186,8 @@ struct v3d_vertex_stateobj {
         unsigned num_elements;
 
         uint8_t attrs[16 * VC5_MAX_ATTRIBUTES];
-        struct v3d_bo *default_attribute_values;
+        struct pipe_resource *defaults;
+        uint32_t defaults_offset;
 };
 
 struct v3d_streamout_stateobj {
@@ -365,18 +367,25 @@ struct v3d_context {
         /** Maximum index buffer valid for the current shader_rec. */
         uint32_t max_index;
 
-        /** Sync object that our RCL will update as its out_sync. */
+        /** Sync object that our RCL or TFU job will update as its out_sync. */
         uint32_t out_sync;
 
+        /* Stream uploader used by gallium internals.  This could also be used
+         * by driver internals, but we tend to use the v3d_cl.h interfaces
+         * instead.
+         */
         struct u_upload_mgr *uploader;
+        /* State uploader used inside the driver.  This is for packing bits of
+         * long-term state inside buffers, since the kernel interfaces
+         * allocate a page at a time.
+         */
+        struct u_upload_mgr *state_uploader;
 
         /** @{ Current pipeline state objects */
         struct pipe_scissor_state scissor;
         struct v3d_blend_state *blend;
         struct v3d_rasterizer_state *rasterizer;
         struct v3d_depth_stencil_alpha_state *zsa;
-
-        struct v3d_texture_stateobj verttex, fragtex;
 
         struct v3d_program_stateobj prog;
 
@@ -414,6 +423,7 @@ struct v3d_context {
         struct pipe_clip_state clip;
         struct pipe_viewport_state viewport;
         struct v3d_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
+        struct v3d_texture_stateobj tex[PIPE_SHADER_TYPES];
         struct v3d_vertexbuf_stateobj vertexbuf;
         struct v3d_streamout_stateobj streamout;
         struct v3d_bo *current_oq;
@@ -449,6 +459,9 @@ struct v3d_blend_state {
         if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF))       \
                 fprintf(stderr, __VA_ARGS__);           \
 } while (0)
+
+#define foreach_bit(b, mask)                                            \
+        for (uint32_t _m = (mask), b; _m && ({(b) = u_bit_scan(&_m); 1;});)
 
 static inline struct v3d_context *
 v3d_context(struct pipe_context *pcontext)
@@ -491,8 +504,7 @@ v3d_ioctl(int fd, unsigned long request, void *arg)
 void v3d_set_shader_uniform_dirty_flags(struct v3d_compiled_shader *shader);
 struct v3d_cl_reloc v3d_write_uniforms(struct v3d_context *v3d,
                                        struct v3d_compiled_shader *shader,
-                                       struct v3d_constbuf_stateobj *cb,
-                                       struct v3d_texture_stateobj *texstate);
+                                       enum pipe_shader_type stage);
 
 void v3d_flush(struct pipe_context *pctx);
 void v3d_job_init(struct v3d_context *v3d);
@@ -526,10 +538,19 @@ void v3d_get_internal_type_bpp_for_output_format(const struct v3d_device_info *d
                                                  uint32_t format,
                                                  uint32_t *type,
                                                  uint32_t *bpp);
+bool v3d_tfu_supports_tex_format(const struct v3d_device_info *devinfo,
+                                 uint32_t tex_format);
 
 void v3d_init_query_functions(struct v3d_context *v3d);
 void v3d_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info);
 void v3d_blitter_save(struct v3d_context *v3d);
+boolean v3d_generate_mipmap(struct pipe_context *pctx,
+                            struct pipe_resource *prsc,
+                            enum pipe_format format,
+                            unsigned int base_level,
+                            unsigned int last_level,
+                            unsigned int first_layer,
+                            unsigned int last_layer);
 
 struct v3d_fence *v3d_fence_create(struct v3d_context *v3d);
 

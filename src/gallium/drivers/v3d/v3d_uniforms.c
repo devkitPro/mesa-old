@@ -28,82 +28,6 @@
 #include "compiler/v3d_compiler.h"
 #include "broadcom/cle/v3d_packet_v33_pack.h"
 
-#if 0
-
-#define SWIZ(x,y,z,w) {          \
-        PIPE_SWIZZLE_##x, \
-        PIPE_SWIZZLE_##y, \
-        PIPE_SWIZZLE_##z, \
-        PIPE_SWIZZLE_##w  \
-}
-
-static void
-write_texture_border_color(struct v3d_job *job,
-                           struct v3d_cl_out **uniforms,
-                           struct v3d_texture_stateobj *texstate,
-                           uint32_t unit)
-{
-        struct pipe_sampler_state *sampler = texstate->samplers[unit];
-        struct pipe_sampler_view *texture = texstate->textures[unit];
-        struct v3d_resource *rsc = v3d_resource(texture->texture);
-        union util_color uc;
-
-        const struct util_format_description *tex_format_desc =
-                util_format_description(texture->format);
-
-        float border_color[4];
-        for (int i = 0; i < 4; i++)
-                border_color[i] = sampler->border_color.f[i];
-        if (util_format_is_srgb(texture->format)) {
-                for (int i = 0; i < 3; i++)
-                        border_color[i] =
-                                util_format_linear_to_srgb_float(border_color[i]);
-        }
-
-        /* Turn the border color into the layout of channels that it would
-         * have when stored as texture contents.
-         */
-        float storage_color[4];
-        util_format_unswizzle_4f(storage_color,
-                                 border_color,
-                                 tex_format_desc->swizzle);
-
-        /* Now, pack so that when the v3d_format-sampled texture contents are
-         * replaced with our border color, the v3d_get_format_swizzle()
-         * swizzling will get the right channels.
-         */
-        if (util_format_is_depth_or_stencil(texture->format)) {
-                uc.ui[0] = util_pack_z(PIPE_FORMAT_Z24X8_UNORM,
-                                       sampler->border_color.f[0]) << 8;
-        } else {
-                switch (rsc->v3d_format) {
-                default:
-                case VC5_TEXTURE_TYPE_RGBA8888:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_R8G8B8A8_UNORM, &uc);
-                        break;
-                case VC5_TEXTURE_TYPE_RGBA4444:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_A8B8G8R8_UNORM, &uc);
-                        break;
-                case VC5_TEXTURE_TYPE_RGB565:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_B8G8R8A8_UNORM, &uc);
-                        break;
-                case VC5_TEXTURE_TYPE_ALPHA:
-                        uc.ui[0] = float_to_ubyte(storage_color[0]) << 24;
-                        break;
-                case VC5_TEXTURE_TYPE_LUMALPHA:
-                        uc.ui[0] = ((float_to_ubyte(storage_color[1]) << 24) |
-                                    (float_to_ubyte(storage_color[0]) << 0));
-                        break;
-                }
-        }
-
-        cl_aligned_u32(uniforms, uc.ui[0]);
-}
-#endif
-
 static uint32_t
 get_texrect_scale(struct v3d_texture_stateobj *texstate,
                   enum quniform_contents contents,
@@ -224,17 +148,13 @@ write_tmu_p0(struct v3d_job *job,
              struct v3d_texture_stateobj *texstate,
              uint32_t data)
 {
-        /* Extract the texture unit from the top bits, and the compiler's
-         * packed p0 from the bottom.
-         */
-        uint32_t unit = data >> 24;
-        uint32_t p0 = data & 0x00ffffff;
-
+        int unit  = v3d_tmu_config_data_get_unit(data);
         struct pipe_sampler_view *psview = texstate->textures[unit];
         struct v3d_sampler_view *sview = v3d_sampler_view(psview);
         struct v3d_resource *rsc = v3d_resource(psview->texture);
 
-        cl_aligned_reloc(&job->indirect, uniforms, sview->bo, p0);
+        cl_aligned_reloc(&job->indirect, uniforms, sview->bo,
+                         v3d_tmu_config_data_get_value(data));
         v3d_job_add_bo(job, rsc->bo);
 }
 
@@ -245,23 +165,20 @@ write_tmu_p1(struct v3d_job *job,
              struct v3d_texture_stateobj *texstate,
              uint32_t data)
 {
-        /* Extract the texture unit from the top bits, and the compiler's
-         * packed p1 from the bottom.
-         */
-        uint32_t unit = data >> 24;
-        uint32_t p0 = data & 0x00ffffff;
-
+        uint32_t unit = v3d_tmu_config_data_get_unit(data);
         struct pipe_sampler_state *psampler = texstate->samplers[unit];
         struct v3d_sampler_state *sampler = v3d_sampler_state(psampler);
 
-        cl_aligned_reloc(&job->indirect, uniforms, sampler->bo, p0);
+        cl_aligned_reloc(&job->indirect, uniforms, sampler->bo,
+                         v3d_tmu_config_data_get_value(data));
 }
 
 struct v3d_cl_reloc
 v3d_write_uniforms(struct v3d_context *v3d, struct v3d_compiled_shader *shader,
-                   struct v3d_constbuf_stateobj *cb,
-                   struct v3d_texture_stateobj *texstate)
+                   enum pipe_shader_type stage)
 {
+        struct v3d_constbuf_stateobj *cb = &v3d->constbuf[stage];
+        struct v3d_texture_stateobj *texstate = &v3d->tex[stage];
         struct v3d_uniform_list *uinfo = &shader->prog_data.base->uniforms;
         struct v3d_job *job = v3d->job;
         const uint32_t *gallium_uniforms = cb->cb[0].user_buffer;
@@ -322,13 +239,6 @@ v3d_write_uniforms(struct v3d_context *v3d, struct v3d_compiled_shader *shader,
                                          uinfo->data[i]);
                         break;
 
-#if 0
-                case QUNIFORM_TEXTURE_FIRST_LEVEL:
-                        write_texture_first_level(job, &uniforms, texstate,
-                                                  uinfo->data[i]);
-                        break;
-#endif
-
                 case QUNIFORM_TEXRECT_SCALE_X:
                 case QUNIFORM_TEXRECT_SCALE_Y:
                         cl_aligned_u32(&uniforms,
@@ -353,10 +263,6 @@ v3d_write_uniforms(struct v3d_context *v3d, struct v3d_compiled_shader *shader,
                                      v3d->zsa->base.alpha.ref_value);
                         break;
 
-                case QUNIFORM_SAMPLE_MASK:
-                        cl_aligned_u32(&uniforms, v3d->sample_mask);
-                        break;
-
                 case QUNIFORM_UBO_ADDR:
                         if (uinfo->data[i] == 0) {
                                 cl_aligned_reloc(&job->indirect, &uniforms,
@@ -375,10 +281,6 @@ v3d_write_uniforms(struct v3d_context *v3d, struct v3d_compiled_shader *shader,
                 case QUNIFORM_TEXTURE_FIRST_LEVEL:
                         cl_aligned_f(&uniforms,
                                      texstate->textures[uinfo->data[i]]->u.tex.first_level);
-                        break;
-
-                case QUNIFORM_TEXTURE_BORDER_COLOR:
-                        /* XXX */
                         break;
 
                 case QUNIFORM_SPILL_OFFSET:
@@ -444,7 +346,6 @@ v3d_set_shader_uniform_dirty_flags(struct v3d_compiled_shader *shader)
                 case QUNIFORM_TMU_CONFIG_P0:
                 case QUNIFORM_TMU_CONFIG_P1:
                 case QUNIFORM_TEXTURE_CONFIG_P1:
-                case QUNIFORM_TEXTURE_BORDER_COLOR:
                 case QUNIFORM_TEXTURE_FIRST_LEVEL:
                 case QUNIFORM_TEXRECT_SCALE_X:
                 case QUNIFORM_TEXRECT_SCALE_Y:
@@ -463,10 +364,6 @@ v3d_set_shader_uniform_dirty_flags(struct v3d_compiled_shader *shader)
 
                 case QUNIFORM_ALPHA_REF:
                         dirty |= VC5_DIRTY_ZSA;
-                        break;
-
-                case QUNIFORM_SAMPLE_MASK:
-                        dirty |= VC5_DIRTY_SAMPLE_STATE;
                         break;
 
                 default:
