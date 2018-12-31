@@ -50,6 +50,15 @@ libglapi = library(
   install : true,
 )
 
+pkg.generate(
+  name : 'glapi',
+  filebase : 'glapi',
+  description : 'Mesa OpenGL shared library',
+  version : meson.project_version(),
+  libraries : libglapi,
+  libraries_private : gl_priv_libs,
+)
+
 if with_any_opengl and with_tests
   test(
     'shared-glapi-test',

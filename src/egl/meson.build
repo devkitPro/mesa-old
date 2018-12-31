@@ -172,6 +172,10 @@ else
   )
 endif
 
+if not with_platform_switch
+  link_for_egl += libmesa_util
+endif
+
 libegl = library(
   egl_lib_name,
   files_egl,
@@ -182,7 +186,7 @@ libegl = library(
   ],
   include_directories : incs_for_egl,
   objects : objs_for_egl,
-  link_with : [link_for_egl, libloader, libxmlconfig, libglapi, libmesa_util],
+  link_with : [link_for_egl, libglapi],
   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
   dependencies : [deps_for_egl, dep_dl, dep_libdrm, dep_clock, dep_thread],
   install : true,
