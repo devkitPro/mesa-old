@@ -286,7 +286,7 @@ case "$host_os" in
     android=yes
     ;;
 linux*|*-gnu*|gnu*|cygwin*|elf*)
-    DEFINES="$DEFINES -D_GNU_SOURCE"
+    DEFINES="$DEFINES -D_GNU_SOURCE -D_C11_SOURCE"
     ;;
 solaris*)
     DEFINES="$DEFINES -DSVR4"

@@ -12,10 +12,10 @@
 #include "drm-uapi/drm_fourcc.h"
 
 #include "nouveau_switch_public.h"
-#include "nouveau_winsys.h"
-#include "nouveau_screen.h"
-#include "nouveau_buffer.h"
-#include "nouveau_drm.h"
+
+#include "nouveau/nouveau_winsys.h"
+#include "nouveau/nouveau_screen.h"
+#include "nouveau/nouveau_buffer.h"
 
 #include <nvif/class.h>
 #include <nvif/cl0080.h>

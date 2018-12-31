@@ -29,15 +29,22 @@
 #ifndef EMULATED_THREADS_H_INCLUDED_
 #define EMULATED_THREADS_H_INCLUDED_
 
-#ifdef __SWITCH__
+#include <time.h>
+
+#ifndef TIME_UTC
+#define TIME_UTC 1
+#endif
+
+#include "c99_compat.h" /* for `inline` */
+
+#ifdef _ISOC11_SOURCE
 #include <threads.h>
 #include <limits.h>
-#include <sys/time.h>
 
 /*-------------------- 7.25.7 Time functions --------------------*/
 // 7.25.6.1
 #ifndef HAVE_TIMESPEC_GET
-#define TIME_UTC 1
+#include <sys/time.h>
 
 static inline int
 timespec_get(struct timespec *ts, int base)
@@ -55,13 +62,6 @@ timespec_get(struct timespec *ts, int base)
 #endif
 
 #else
-#include <time.h>
-
-#ifndef TIME_UTC
-#define TIME_UTC 1
-#endif
-
-#include "c99_compat.h" /* for `inline` */
 
 /*---------------------------- types ----------------------------*/
 typedef void (*tss_dtor_t)(void*);
@@ -93,7 +93,7 @@ enum {
 #else
 #error Not supported on this platform.
 #endif
-#endif
 
+#endif
 
 #endif /* EMULATED_THREADS_H_INCLUDED_ */

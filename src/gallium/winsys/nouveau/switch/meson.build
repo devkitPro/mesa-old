@@ -1,4 +1,4 @@
-# Copyright © 2017 Dylan Baker
+# Copyright © 2019 fincs
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -20,7 +20,7 @@
 
 libnouveauwinsys = static_library(
   'nouveauwinsys',
-  files('nouveau_drm_public.h', 'nouveau_drm_winsys.c'),
+  files('nouveau_switch_public.h', 'nouveau_switch_winsys.c'),
   include_directories : [
     inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
   ],

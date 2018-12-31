@@ -154,6 +154,8 @@ static void switch_destroy_default_window(void)
 }
 
 // Shims for gfx functions
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 void gfxInitResolution(u32 width, u32 height)
 {
@@ -180,6 +182,8 @@ void gfxConfigureTransform(u32 transform)
 {
     nwindowSetTransform(&s_defaultWin, transform);
 }
+
+#pragma GCC diagnostic pop
 
 //-----------------------------------------------------------------------------
 // switch_framebuffer methods
@@ -460,8 +464,10 @@ switch_add_config(_EGLDisplay *dpy, EGLint *id, enum pipe_format colorfmt, enum 
     conf->base.BufferSize = conf->base.RedSize+conf->base.GreenSize+conf->base.BlueSize+conf->base.AlphaSize;
 
     // Depth/stencil buffer configuration
-    conf->base.DepthSize   = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 0);
-    conf->base.StencilSize = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 1);
+    if (depthfmt != PIPE_FORMAT_NONE) {
+        conf->base.DepthSize   = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 0);
+        conf->base.StencilSize = util_format_get_component_bits(depthfmt, UTIL_FORMAT_COLORSPACE_ZS, 1);
+    }
 
     // Visual
     conf->stvis.buffer_mask = ST_ATTACHMENT_FRONT_LEFT_MASK | ST_ATTACHMENT_BACK_LEFT_MASK;
