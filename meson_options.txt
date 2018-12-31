@@ -23,7 +23,7 @@ option(
   type : 'array',
   value : ['auto'],
   choices : [
-    '', 'auto', 'x11', 'wayland', 'drm', 'surfaceless', 'haiku', 'android',
+    '', 'auto', 'x11', 'wayland', 'drm', 'surfaceless', 'haiku', 'switch', 'android',
   ],
   description : 'window systems to support. If this is set to `auto`, all platforms applicable will be enabled.'
 )

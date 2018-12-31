@@ -27,7 +27,7 @@ es1_glapi_mapi_tmp_h = custom_target(
   capture : true,
 )
 
-libglesv1_cm = shared_library(
+libglesv1_cm = library(
   'GLESv1_CM',
   ['../entry.c', es1_glapi_mapi_tmp_h],
   c_args : [

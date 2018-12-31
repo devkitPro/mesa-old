@@ -25,6 +25,7 @@ inc_mapi = include_directories('mapi')
 inc_src = include_directories('.')
 inc_gallium = include_directories('gallium/include')
 inc_gallium_aux = include_directories('gallium/auxiliary')
+inc_gallium_winsys = include_directories('gallium/winsys')
 inc_amd_common = include_directories('amd/common')
 
 libglsl_util = static_library(
@@ -82,9 +83,6 @@ if with_gbm
 else
   inc_gbm = []
 endif
-if with_egl
-  subdir('egl')
-endif
 if with_gallium
   subdir('gallium')
   # This has to be here since it requires libgallium, and subdir cannot
@@ -92,6 +90,9 @@ if with_gallium
   if with_tests and with_shared_glapi
     subdir('mesa/state_tracker/tests')
   endif
+endif
+if with_egl
+  subdir('egl')
 endif
 
 # This must be after at least mesa, glx, and gallium, since libgl will be

@@ -22,6 +22,7 @@ inc_egl = include_directories('.', 'main')
 inc_egl_dri2 = include_directories('drivers/dri2')
 
 c_args_for_egl = []
+objs_for_egl = []
 link_for_egl = []
 deps_for_egl = []
 incs_for_egl = [inc_include, inc_drm_uapi, inc_src, inc_egl]
@@ -137,6 +138,20 @@ elif with_platform_haiku
   files_egl += files('drivers/haiku/egl_haiku.cpp')
   link_for_egl += libgl
   deps_for_egl += cpp.find_library('be')
+elif with_platform_switch
+  incs_for_egl += [inc_gallium, inc_gallium_aux, inc_gallium_winsys, inc_mesa]
+  files_egl += files('drivers/switch/egl_switch.c')
+  objs_for_egl += [
+    libmesa_gallium.extract_all_objects(),
+    libglsl.extract_all_objects(),
+    libglcpp.extract_all_objects(),
+    libmesa_util.extract_all_objects(),
+    libcompiler.extract_all_objects(),
+    libgallium.extract_all_objects(),
+    libgalliumvl_stub.extract_all_objects(),
+    libnouveauwinsys.extract_all_objects(),
+    libnouveau.extract_all_objects()
+  ]
 endif
 
 if cc.has_function('mincore')
@@ -157,7 +172,7 @@ else
   )
 endif
 
-libegl = shared_library(
+libegl = library(
   egl_lib_name,
   files_egl,
   c_args : [
@@ -166,6 +181,7 @@ libegl = shared_library(
     '-D_EGL_NATIVE_PLATFORM=_EGL_PLATFORM_@0@'.format(egl_native_platform.to_upper()),
   ],
   include_directories : incs_for_egl,
+  objects : objs_for_egl,
   link_with : [link_for_egl, libloader, libxmlconfig, libglapi, libmesa_util],
   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
   dependencies : [deps_for_egl, dep_dl, dep_libdrm, dep_clock, dep_thread],

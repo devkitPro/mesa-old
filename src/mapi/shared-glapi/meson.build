@@ -36,7 +36,7 @@ shared_glapi_mapi_tmp_h = custom_target(
   capture : true,
 )
 
-libglapi = shared_library(
+libglapi = library(
   'glapi',
   [files_mapi_glapi, files_mapi_util, shared_glapi_mapi_tmp_h],
   c_args : [
