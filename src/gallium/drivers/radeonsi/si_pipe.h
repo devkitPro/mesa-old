@@ -103,7 +103,7 @@
 
 #define SI_RESOURCE_FLAG_TRANSFER	(PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
 #define SI_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
-#define SI_RESOURCE_FLAG_FORCE_TILING	(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
+#define SI_RESOURCE_FLAG_FORCE_MSAA_TILING (PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
 #define SI_RESOURCE_FLAG_DISABLE_DCC	(PIPE_RESOURCE_FLAG_DRV_PRIV << 3)
 #define SI_RESOURCE_FLAG_UNMAPPABLE	(PIPE_RESOURCE_FLAG_DRV_PRIV << 4)
 #define SI_RESOURCE_FLAG_READ_ONLY	(PIPE_RESOURCE_FLAG_DRV_PRIV << 5)
@@ -1236,11 +1236,9 @@ unsigned si_end_counter(struct si_screen *sscreen, unsigned type,
 /* si_compute.c */
 void si_init_compute_functions(struct si_context *sctx);
 
-/* r600_perfcounters.c */
-void si_perfcounters_destroy(struct si_screen *sscreen);
-
 /* si_perfcounters.c */
 void si_init_perfcounters(struct si_screen *screen);
+void si_destroy_perfcounters(struct si_screen *screen);
 
 /* si_pipe.c */
 bool si_check_device_reset(struct si_context *sctx);

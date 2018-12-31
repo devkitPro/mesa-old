@@ -865,7 +865,7 @@ void anv_GetPhysicalDeviceFeatures(
       .shaderInt64                              = pdevice->info.gen >= 8 &&
                                                   pdevice->info.has_64bit_types,
       .shaderInt16                              = pdevice->info.gen >= 8,
-      .shaderResourceMinLod                     = false,
+      .shaderResourceMinLod                     = pdevice->info.gen >= 9,
       .variableMultisampleRate                  = true,
       .inheritedQueries                         = true,
    };
@@ -2268,6 +2268,7 @@ VkResult anv_AllocateMemory(
    mem->type = &pdevice->memory.types[pAllocateInfo->memoryTypeIndex];
    mem->map = NULL;
    mem->map_size = 0;
+   mem->ahw = NULL;
 
    uint64_t bo_flags = 0;
 
@@ -2289,6 +2290,43 @@ VkResult anv_AllocateMemory(
 
    if (pdevice->use_softpin)
       bo_flags |= EXEC_OBJECT_PINNED;
+
+   const VkExportMemoryAllocateInfo *export_info =
+      vk_find_struct_const(pAllocateInfo->pNext, EXPORT_MEMORY_ALLOCATE_INFO);
+
+   /* Check if we need to support Android HW buffer export. If so,
+    * create AHardwareBuffer and import memory from it.
+    */
+   bool android_export = false;
+   if (export_info && export_info->handleTypes &
+       VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID)
+      android_export = true;
+
+   /* Android memory import. */
+   const struct VkImportAndroidHardwareBufferInfoANDROID *ahw_import_info =
+      vk_find_struct_const(pAllocateInfo->pNext,
+                           IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID);
+
+   if (ahw_import_info) {
+      result = anv_import_ahw_memory(_device, mem, ahw_import_info);
+      if (result != VK_SUCCESS)
+         goto fail;
+
+      goto success;
+   } else if (android_export) {
+      result = anv_create_ahw_memory(_device, mem, pAllocateInfo);
+      if (result != VK_SUCCESS)
+         goto fail;
+
+      const struct VkImportAndroidHardwareBufferInfoANDROID import_info = {
+         .buffer = mem->ahw,
+      };
+      result = anv_import_ahw_memory(_device, mem, &import_info);
+      if (result != VK_SUCCESS)
+         goto fail;
+
+      goto success;
+   }
 
    const VkImportMemoryFdInfoKHR *fd_info =
       vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
@@ -2340,42 +2378,44 @@ VkResult anv_AllocateMemory(
        * If the import fails, we leave the file descriptor open.
        */
       close(fd_info->fd);
-   } else {
-      const VkExportMemoryAllocateInfoKHR *fd_info =
-         vk_find_struct_const(pAllocateInfo->pNext, EXPORT_MEMORY_ALLOCATE_INFO_KHR);
-      if (fd_info && fd_info->handleTypes)
-         bo_flags |= ANV_BO_EXTERNAL;
+      goto success;
+   }
 
-      result = anv_bo_cache_alloc(device, &device->bo_cache,
-                                  pAllocateInfo->allocationSize, bo_flags,
-                                  &mem->bo);
-      if (result != VK_SUCCESS)
-         goto fail;
+   /* Regular allocate (not importing memory). */
 
-      const VkMemoryDedicatedAllocateInfoKHR *dedicated_info =
-         vk_find_struct_const(pAllocateInfo->pNext, MEMORY_DEDICATED_ALLOCATE_INFO_KHR);
-      if (dedicated_info && dedicated_info->image != VK_NULL_HANDLE) {
-         ANV_FROM_HANDLE(anv_image, image, dedicated_info->image);
+   if (export_info && export_info->handleTypes)
+      bo_flags |= ANV_BO_EXTERNAL;
 
-         /* Some legacy (non-modifiers) consumers need the tiling to be set on
-          * the BO.  In this case, we have a dedicated allocation.
-          */
-         if (image->needs_set_tiling) {
-            const uint32_t i915_tiling =
-               isl_tiling_to_i915_tiling(image->planes[0].surface.isl.tiling);
-            int ret = anv_gem_set_tiling(device, mem->bo->gem_handle,
-                                         image->planes[0].surface.isl.row_pitch_B,
-                                         i915_tiling);
-            if (ret) {
-               anv_bo_cache_release(device, &device->bo_cache, mem->bo);
-               return vk_errorf(device->instance, NULL,
-                                VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                                "failed to set BO tiling: %m");
-            }
+   result = anv_bo_cache_alloc(device, &device->bo_cache,
+                               pAllocateInfo->allocationSize, bo_flags,
+                               &mem->bo);
+   if (result != VK_SUCCESS)
+      goto fail;
+
+   const VkMemoryDedicatedAllocateInfoKHR *dedicated_info =
+      vk_find_struct_const(pAllocateInfo->pNext, MEMORY_DEDICATED_ALLOCATE_INFO_KHR);
+   if (dedicated_info && dedicated_info->image != VK_NULL_HANDLE) {
+      ANV_FROM_HANDLE(anv_image, image, dedicated_info->image);
+
+      /* Some legacy (non-modifiers) consumers need the tiling to be set on
+       * the BO.  In this case, we have a dedicated allocation.
+       */
+      if (image->needs_set_tiling) {
+         const uint32_t i915_tiling =
+            isl_tiling_to_i915_tiling(image->planes[0].surface.isl.tiling);
+         int ret = anv_gem_set_tiling(device, mem->bo->gem_handle,
+                                      image->planes[0].surface.isl.row_pitch_B,
+                                      i915_tiling);
+         if (ret) {
+            anv_bo_cache_release(device, &device->bo_cache, mem->bo);
+            return vk_errorf(device->instance, NULL,
+                             VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "failed to set BO tiling: %m");
          }
       }
    }
 
+ success:
    *pMem = anv_device_memory_to_handle(mem);
 
    return VK_SUCCESS;
@@ -2445,6 +2485,11 @@ void anv_FreeMemory(
       anv_UnmapMemory(_device, _mem);
 
    anv_bo_cache_release(device, &device->bo_cache, mem->bo);
+
+#ifdef ANDROID
+   if (mem->ahw)
+      AHardwareBuffer_release(mem->ahw);
+#endif
 
    vk_free2(&device->alloc, pAllocator, mem);
 }
@@ -2667,6 +2712,12 @@ void anv_GetImageMemoryRequirements(
     */
    uint32_t memory_types = (1ull << pdevice->memory.type_count) - 1;
 
+   /* We must have image allocated or imported at this point. According to the
+    * specification, external images must have been bound to memory before
+    * calling GetImageMemoryRequirements.
+    */
+   assert(image->size > 0);
+
    pMemoryRequirements->size = image->size;
    pMemoryRequirements->alignment = image->alignment;
    pMemoryRequirements->memoryTypeBits = memory_types;
@@ -2707,6 +2758,12 @@ void anv_GetImageMemoryRequirements2(
          pMemoryRequirements->memoryRequirements.memoryTypeBits =
                (1ull << pdevice->memory.type_count) - 1;
 
+         /* We must have image allocated or imported at this point. According to the
+          * specification, external images must have been bound to memory before
+          * calling GetImageMemoryRequirements.
+          */
+         assert(image->planes[plane].size > 0);
+
          pMemoryRequirements->memoryRequirements.size = image->planes[plane].size;
          pMemoryRequirements->memoryRequirements.alignment =
             image->planes[plane].alignment;
@@ -2723,7 +2780,7 @@ void anv_GetImageMemoryRequirements2(
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
          VkMemoryDedicatedRequirements *requirements = (void *)ext;
-         if (image->needs_set_tiling) {
+         if (image->needs_set_tiling || image->external_format) {
             /* If we need to set the tiling for external consumers, we need a
              * dedicated allocation.
              *

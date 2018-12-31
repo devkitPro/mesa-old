@@ -2087,6 +2087,10 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 		radv_link_shaders(pipeline, nir);
 
 	for (int i = 0; i < MESA_SHADER_STAGES; ++i) {
+		if (nir[i]) {
+			NIR_PASS_V(nir[i], nir_lower_bool_to_int32);
+		}
+
 		if (radv_can_dump_shader(device, modules[i], false))
 			nir_print_shader(nir[i], stderr);
 	}
@@ -3394,8 +3398,7 @@ radv_compute_ia_multi_vgt_param_helpers(struct radv_pipeline *pipeline,
 		    (pipeline->graphics.prim_restart_enable &&
 		     (device->physical_device->rad_info.family < CHIP_POLARIS10 ||
 		      (prim != V_008958_DI_PT_POINTLIST &&
-		       prim != V_008958_DI_PT_LINESTRIP &&
-		       prim != V_008958_DI_PT_TRISTRIP))))
+		       prim != V_008958_DI_PT_LINESTRIP))))
 			ia_multi_vgt_param.wd_switch_on_eop = true;
 	}
 

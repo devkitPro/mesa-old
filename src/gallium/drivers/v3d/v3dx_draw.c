@@ -124,11 +124,20 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
 {
         struct v3d_context *v3d = v3d_context(pctx);
 
+        /* XXX perf: If we're reading from the output of TF in this job, we
+         * should instead be using the wait for transform feedback
+         * functionality.
+         */
+
         /* Flush writes to textures we're sampling. */
         for (int i = 0; i < v3d->tex[s].num_textures; i++) {
-                struct pipe_sampler_view *view = v3d->tex[s].textures[i];
-                if (!view)
+                struct pipe_sampler_view *pview = v3d->tex[s].textures[i];
+                if (!pview)
                         continue;
+                struct v3d_sampler_view *view = v3d_sampler_view(pview);
+
+                if (view->texture != view->base.texture)
+                        v3d_update_shadow_texture(pctx, &view->base);
 
                 v3d_flush_jobs_writing_resource(v3d, view->texture);
         }
@@ -171,6 +180,10 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                                     cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
                                     32);
 
+        /* XXX perf: We should move most of the SHADER_STATE_RECORD setup to
+         * compile time, so that we mostly just have to OR the VS and FS
+         * records together at draw time.
+         */
         cl_emit(&job->indirect, GL_SHADER_STATE_RECORD, shader) {
                 shader.enable_clipping = true;
                 /* VC5_DIRTY_PRIM_MODE | VC5_DIRTY_RASTERIZER */
@@ -446,6 +459,9 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         for (int s = 0; s < PIPE_SHADER_TYPES; s++)
                 v3d_predraw_check_stage_inputs(pctx, s);
 
+        if (info->indirect)
+                v3d_flush_jobs_writing_resource(v3d, info->indirect->buffer);
+
         struct v3d_job *job = v3d_get_job_for_fbo(v3d);
 
         /* If vertex texturing depends on the output of rendering, we need to
@@ -543,7 +559,23 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 }
 #endif
 
-                if (info->instance_count > 1) {
+                if (info->indirect) {
+                        cl_emit(&job->bcl, INDIRECT_INDEXED_INSTANCED_PRIM_LIST, prim) {
+                                prim.index_type = ffs(info->index_size) - 1;
+#if V3D_VERSION < 40
+                                prim.address_of_indices_list =
+                                        cl_address(rsc->bo, offset);
+#endif /* V3D_VERSION < 40 */
+                                prim.mode = info->mode | prim_tf_enable;
+                                prim.enable_primitive_restarts = info->primitive_restart;
+
+                                prim.number_of_draw_indirect_indexed_records = info->indirect->draw_count;
+
+                                prim.stride_in_multiples_of_4_bytes = info->indirect->stride >> 2;
+                                prim.address = cl_address(v3d_resource(info->indirect->buffer)->bo,
+                                                          info->indirect->offset);
+                        }
+                } else if (info->instance_count > 1) {
                         cl_emit(&job->bcl, INDEXED_INSTANCED_PRIM_LIST, prim) {
                                 prim.index_type = ffs(info->index_size) - 1;
 #if V3D_VERSION >= 40
@@ -580,7 +612,16 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 if (info->has_user_indices)
                         pipe_resource_reference(&prsc, NULL);
         } else {
-                if (info->instance_count > 1) {
+                if (info->indirect) {
+                        cl_emit(&job->bcl, INDIRECT_VERTEX_ARRAY_INSTANCED_PRIMS, prim) {
+                                prim.mode = info->mode | prim_tf_enable;
+                                prim.number_of_draw_indirect_array_records = info->indirect->draw_count;
+
+                                prim.stride_in_multiples_of_4_bytes = info->indirect->stride >> 2;
+                                prim.address = cl_address(v3d_resource(info->indirect->buffer)->bo,
+                                                          info->indirect->offset);
+                        }
+                } else if (info->instance_count > 1) {
                         cl_emit(&job->bcl, VERTEX_ARRAY_INSTANCED_PRIMS, prim) {
                                 prim.mode = info->mode | prim_tf_enable;
                                 prim.index_of_first_vertex = info->start;

@@ -841,7 +841,7 @@ si_lower_nir(struct si_shader_selector* sel)
 		NIR_PASS(progress, sel->nir, nir_opt_if);
 		NIR_PASS(progress, sel->nir, nir_opt_dead_cf);
 		NIR_PASS(progress, sel->nir, nir_opt_cse);
-		NIR_PASS(progress, sel->nir, nir_opt_peephole_select, 8);
+		NIR_PASS(progress, sel->nir, nir_opt_peephole_select, 8, true, true);
 
 		/* Needed for algebraic lowering */
 		NIR_PASS(progress, sel->nir, nir_opt_algebraic);
@@ -853,6 +853,8 @@ si_lower_nir(struct si_shader_selector* sel)
 			NIR_PASS(progress, sel->nir, nir_opt_loop_unroll, 0);
 		}
 	} while (progress);
+
+	NIR_PASS_V(sel->nir, nir_lower_bool_to_int32);
 }
 
 static void declare_nir_input_vs(struct si_shader_context *ctx,

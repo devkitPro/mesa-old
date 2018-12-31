@@ -212,9 +212,9 @@ nir_imm_bool(nir_builder *build, bool x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.u32[0] = x ? NIR_TRUE : NIR_FALSE;
+   v.b[0] = x;
 
-   return nir_build_imm(build, 1, 32, v);
+   return nir_build_imm(build, 1, 1, v);
 }
 
 static inline nir_ssa_def *
@@ -332,7 +332,10 @@ nir_imm_intN_t(nir_builder *build, uint64_t x, unsigned bit_size)
 
    memset(&v, 0, sizeof(v));
    assert(bit_size <= 64);
-   v.i64[0] = x & (~0ull >> (64 - bit_size));
+   if (bit_size == 1)
+      v.b[0] = x & 1;
+   else
+      v.i64[0] = x & (~0ull >> (64 - bit_size));
 
    return nir_build_imm(build, 1, bit_size, v);
 }
@@ -349,6 +352,13 @@ nir_imm_ivec4(nir_builder *build, int x, int y, int z, int w)
    v.i32[3] = w;
 
    return nir_build_imm(build, 4, 32, v);
+}
+
+static inline nir_ssa_def *
+nir_imm_boolN_t(nir_builder *build, bool x, unsigned bit_size)
+{
+   /* We use a 0/-1 convention for all booleans regardless of size */
+   return nir_imm_intN_t(build, -(int)x, bit_size);
 }
 
 static inline nir_ssa_def *
@@ -966,13 +976,13 @@ nir_load_param(nir_builder *build, uint32_t param_idx)
 static inline nir_ssa_def *
 nir_f2b(nir_builder *build, nir_ssa_def *f)
 {
-   return nir_f2b32(build, f);
+   return nir_f2b1(build, f);
 }
 
 static inline nir_ssa_def *
 nir_i2b(nir_builder *build, nir_ssa_def *i)
 {
-   return nir_i2b32(build, i);
+   return nir_i2b1(build, i);
 }
 
 static inline nir_ssa_def *

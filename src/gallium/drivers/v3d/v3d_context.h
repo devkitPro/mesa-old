@@ -95,6 +95,12 @@ struct v3d_sampler_view {
         uint8_t texture_shader_state[32];
         /* V3D 4.x: Texture state struct. */
         struct v3d_bo *bo;
+
+        /* Actual texture to be read by this sampler view.  May be different
+         * from base.texture in the case of having a shadow tiled copy of a
+         * raster texture.
+         */
+        struct pipe_resource *texture;
 };
 
 struct v3d_sampler_state {
@@ -427,6 +433,7 @@ struct v3d_context {
         struct v3d_vertexbuf_stateobj vertexbuf;
         struct v3d_streamout_stateobj streamout;
         struct v3d_bo *current_oq;
+        struct pipe_debug_callback debug;
         /** @} */
 };
 
@@ -458,6 +465,8 @@ struct v3d_blend_state {
 #define perf_debug(...) do {                            \
         if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF))       \
                 fprintf(stderr, __VA_ARGS__);           \
+        if (unlikely(v3d->debug.debug_message))         \
+                pipe_debug_message(&v3d->debug, PERF_INFO, __VA_ARGS__);    \
 } while (0)
 
 #define foreach_bit(b, mask)                                            \

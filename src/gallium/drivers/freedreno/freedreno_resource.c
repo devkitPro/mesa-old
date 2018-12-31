@@ -35,6 +35,7 @@
 
 #include "freedreno_resource.h"
 #include "freedreno_batch_cache.h"
+#include "freedreno_blitter.h"
 #include "freedreno_fence.h"
 #include "freedreno_screen.h"
 #include "freedreno_surface.h"
@@ -97,10 +98,11 @@ rebind_resource(struct fd_context *ctx, struct pipe_resource *prsc)
 static void
 realloc_bo(struct fd_resource *rsc, uint32_t size)
 {
+	struct pipe_resource *prsc = &rsc->base;
 	struct fd_screen *screen = fd_screen(rsc->base.screen);
 	uint32_t flags = DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
 			DRM_FREEDRENO_GEM_TYPE_KMEM |
-			COND(rsc->base.bind & PIPE_BIND_SCANOUT, DRM_FREEDRENO_GEM_SCANOUT);
+			COND(prsc->bind & PIPE_BIND_SCANOUT, DRM_FREEDRENO_GEM_SCANOUT);
 			/* TODO other flags? */
 
 	/* if we start using things other than write-combine,
@@ -110,7 +112,8 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
 	if (rsc->bo)
 		fd_bo_del(rsc->bo);
 
-	rsc->bo = fd_bo_new(screen->dev, size, flags);
+	rsc->bo = fd_bo_new(screen->dev, size, flags, "%ux%ux%u@%u:%x",
+			prsc->width0, prsc->height0, prsc->depth0, rsc->cpp, prsc->bind);
 	rsc->seqno = p_atomic_inc_return(&screen->rsc_seqno);
 	util_range_set_empty(&rsc->valid_buffer_range);
 	fd_bc_invalidate_resource(rsc, true);
@@ -342,17 +345,6 @@ fd_blit_to_staging(struct fd_context *ctx, struct fd_transfer *trans)
 	blit.filter = PIPE_TEX_FILTER_NEAREST;
 
 	do_blit(ctx, &blit, false);
-}
-
-static unsigned
-fd_resource_layer_offset(struct fd_resource *rsc,
-						 struct fd_resource_slice *slice,
-						 unsigned layer)
-{
-	if (rsc->layer_first)
-		return layer * rsc->layer_size;
-	else
-		return layer * slice->size0;
 }
 
 static void fd_resource_transfer_flush_region(struct pipe_context *pctx,
@@ -623,10 +615,10 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 	}
 
 	buf = fd_bo_map(rsc->bo);
-	offset = slice->offset +
+	offset =
 		box->y / util_format_get_blockheight(format) * ptrans->stride +
 		box->x / util_format_get_blockwidth(format) * rsc->cpp +
-		fd_resource_layer_offset(rsc, slice, box->z);
+		fd_resource_offset(rsc, level, box->z);
 
 	if (usage & PIPE_TRANSFER_WRITE)
 		rsc->valid = true;
@@ -869,7 +861,7 @@ fd_resource_create(struct pipe_screen *pscreen,
 		rsc->lrz_height = lrz_height;
 		rsc->lrz_width = lrz_pitch;
 		rsc->lrz_pitch = lrz_pitch;
-		rsc->lrz = fd_bo_new(screen->dev, size, flags);
+		rsc->lrz = fd_bo_new(screen->dev, size, flags, "lrz");
 	}
 
 	size = screen->setup_slices(rsc);
@@ -953,68 +945,6 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
 fail:
 	fd_resource_destroy(pscreen, prsc);
 	return NULL;
-}
-
-/**
- * _copy_region using pipe (3d engine)
- */
-static bool
-fd_blitter_pipe_copy_region(struct fd_context *ctx,
-		struct pipe_resource *dst,
-		unsigned dst_level,
-		unsigned dstx, unsigned dsty, unsigned dstz,
-		struct pipe_resource *src,
-		unsigned src_level,
-		const struct pipe_box *src_box)
-{
-	/* not until we allow rendertargets to be buffers */
-	if (dst->target == PIPE_BUFFER || src->target == PIPE_BUFFER)
-		return false;
-
-	if (!util_blitter_is_copy_supported(ctx->blitter, dst, src))
-		return false;
-
-	/* TODO we could discard if dst box covers dst level fully.. */
-	fd_blitter_pipe_begin(ctx, false, false, FD_STAGE_BLIT);
-	util_blitter_copy_texture(ctx->blitter,
-			dst, dst_level, dstx, dsty, dstz,
-			src, src_level, src_box);
-	fd_blitter_pipe_end(ctx);
-
-	return true;
-}
-
-/**
- * Copy a block of pixels from one resource to another.
- * The resource must be of the same format.
- * Resources with nr_samples > 1 are not allowed.
- */
-static void
-fd_resource_copy_region(struct pipe_context *pctx,
-		struct pipe_resource *dst,
-		unsigned dst_level,
-		unsigned dstx, unsigned dsty, unsigned dstz,
-		struct pipe_resource *src,
-		unsigned src_level,
-		const struct pipe_box *src_box)
-{
-	struct fd_context *ctx = fd_context(pctx);
-
-	/* TODO if we have 2d core, or other DMA engine that could be used
-	 * for simple copies and reasonably easily synchronized with the 3d
-	 * core, this is where we'd plug it in..
-	 */
-
-	/* try blit on 3d pipe: */
-	if (fd_blitter_pipe_copy_region(ctx,
-			dst, dst_level, dstx, dsty, dstz,
-			src, src_level, src_box))
-		return;
-
-	/* else fallback to pure sw: */
-	util_resource_copy_region(pctx,
-			dst, dst_level, dstx, dsty, dstz,
-			src, src_level, src_box);
 }
 
 bool

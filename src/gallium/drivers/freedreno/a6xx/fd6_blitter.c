@@ -52,6 +52,19 @@ ok_dims(const struct pipe_resource *r, const struct pipe_box *b, int lvl)
 		(b->z >= 0) && (b->z + b->depth <= last_layer);
 }
 
+static bool
+ok_format(enum pipe_format pfmt)
+{
+	enum a6xx_color_fmt fmt = fd6_pipe2color(pfmt);
+	if (fmt == ~0)
+		return false;
+
+	if (fd6_ifmt(fmt) == 0)
+		return false;
+
+	return true;
+}
+
 #define DEBUG_BLIT_FALLBACK 0
 #define fail_if(cond)													\
 	do {																\
@@ -80,6 +93,10 @@ can_do_blit(const struct pipe_blit_info *info)
 	/* We can blit if both or neither formats are compressed formats... */
 	fail_if(util_format_is_compressed(info->src.format) !=
 			util_format_is_compressed(info->src.format));
+
+	/* Fail if unsupported format: */
+	fail_if(!ok_format(info->src.format));
+	fail_if(!ok_format(info->dst.format));
 
 	/* ... but only if they're the same compression format. */
 	fail_if(util_format_is_compressed(info->src.format) &&
@@ -279,13 +296,13 @@ emit_blit_buffer(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
 		OUT_RING(ring, 0x3f);
 		OUT_WFI5(ring);
 
-		OUT_PKT4(ring, 0x8c01, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8C01, 1);
 		OUT_RING(ring, 0);
 
-		OUT_PKT4(ring, 0xacc0, 1);
+		OUT_PKT4(ring, REG_A6XX_SP_2D_SRC_FORMAT, 1);
 		OUT_RING(ring, 0xf180);
 
-		OUT_PKT4(ring, 0x8e04, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
 		OUT_RING(ring, 0x01000000);
 
 		OUT_PKT7(ring, CP_BLIT, 1);
@@ -293,7 +310,7 @@ emit_blit_buffer(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
 
 		OUT_WFI5(ring);
 
-		OUT_PKT4(ring, 0x8e04, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
 		OUT_RING(ring, 0);
 	}
 }
@@ -463,13 +480,25 @@ emit_blit_texture(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
 		OUT_RING(ring, 0x3f);
 		OUT_WFI5(ring);
 
-		OUT_PKT4(ring, 0x8c01, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8C01, 1);
 		OUT_RING(ring, 0);
 
-		OUT_PKT4(ring, 0xacc0, 1);
-		OUT_RING(ring, 0xf180);
+		OUT_PKT4(ring, REG_A6XX_SP_2D_SRC_FORMAT, 1);
+		OUT_RING(ring, A6XX_SP_2D_SRC_FORMAT_COLOR_FORMAT(sfmt) |
+				COND(util_format_is_pure_sint(info->src.format),
+						A6XX_SP_2D_SRC_FORMAT_SINT) |
+				COND(util_format_is_pure_uint(info->src.format),
+						A6XX_SP_2D_SRC_FORMAT_UINT) |
+				COND(util_format_is_snorm(info->src.format),
+						A6XX_SP_2D_SRC_FORMAT_SINT |
+						A6XX_SP_2D_SRC_FORMAT_NORM) |
+				COND(util_format_is_unorm(info->src.format),
+// TODO sometimes blob uses UINT+NORM but dEQP seems unhappy about that
+//						A6XX_SP_2D_SRC_FORMAT_UINT |
+						A6XX_SP_2D_SRC_FORMAT_NORM) |
+				0xf000);
 
-		OUT_PKT4(ring, 0x8e04, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
 		OUT_RING(ring, 0x01000000);
 
 		OUT_PKT7(ring, CP_BLIT, 1);
@@ -477,23 +506,16 @@ emit_blit_texture(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
 
 		OUT_WFI5(ring);
 
-		OUT_PKT4(ring, 0x8e04, 1);
+		OUT_PKT4(ring, REG_A6XX_RB_UNKNOWN_8E04, 1);
 		OUT_RING(ring, 0);
 	}
 }
 
 static void
-fd6_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
+emit_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct fd_batch *batch;
-
-	if (!can_do_blit(info)) {
-		fd_blitter_pipe_begin(ctx, info->render_condition_enable, false, FD_STAGE_BLIT);
-		fd_blitter_blit(ctx, info);
-		fd_blitter_pipe_end(ctx);
-		return;
-	}
 
 	fd_fence_ref(pctx->screen, &ctx->last_fence, NULL);
 
@@ -535,6 +557,21 @@ fd6_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 }
 
 static void
+fd6_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
+{
+	struct fd_context *ctx = fd_context(pctx);
+
+	if (!can_do_blit(info)) {
+		fd_blitter_pipe_begin(ctx, info->render_condition_enable, false, FD_STAGE_BLIT);
+		fd_blitter_blit(ctx, info);
+		fd_blitter_pipe_end(ctx);
+		return;
+	}
+
+	emit_blit(pctx, info);
+}
+
+static void
 fd6_resource_copy_region(struct pipe_context *pctx,
 		struct pipe_resource *dst,
 		unsigned dst_level,
@@ -567,7 +604,14 @@ fd6_resource_copy_region(struct pipe_context *pctx,
 	info.filter = PIPE_TEX_FILTER_NEAREST;
 	info.scissor_enable = 0;
 
-	fd6_blit(pctx, &info);
+	if (!can_do_blit(&info)) {
+		fd_resource_copy_region(pctx,
+				dst, dst_level, dstx, dsty, dstz,
+				src, src_level, src_box);
+		return;
+	}
+
+	emit_blit(pctx, &info);
 }
 
 void

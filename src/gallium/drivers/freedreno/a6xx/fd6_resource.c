@@ -42,7 +42,7 @@ static const struct {
 };
 
 /* NOTE: good way to test this is:  (for example)
- *  piglit/bin/texelFetch fs sampler2D 100x100x1-100x300x1
+ *  piglit/bin/texelFetch fs sampler3D 100x100x8
  */
 static uint32_t
 setup_slices(struct fd_resource *rsc, uint32_t alignment, enum pipe_format format)
@@ -73,7 +73,19 @@ setup_slices(struct fd_resource *rsc, uint32_t alignment, enum pipe_format forma
 			pitchalign = tile_alignment[rsc->cpp].pitchalign;
 			aligned_height = align(aligned_height, heightalign);
 		} else {
-			pitchalign = 64;
+			if (prsc->target == PIPE_TEXTURE_3D) {
+				unsigned a;
+				if (width >= 64) {
+					a = util_next_power_of_two(MAX2(width, height));
+				} else {
+					a = 16;
+				}
+
+				pitchalign = align(a, 64);
+				aligned_height = align(aligned_height, a);
+			} else {
+				pitchalign = 64;
+			}
 
 			/* The blits used for mem<->gmem work at a granularity of
 			 * 32x32, which can cause faults due to over-fetch on the
@@ -96,30 +108,30 @@ setup_slices(struct fd_resource *rsc, uint32_t alignment, enum pipe_format forma
 		blocks = util_format_get_nblocks(format, slice->pitch, aligned_height);
 
 		/* 1d array and 2d array textures must all have the same layer size
-		 * for each miplevel on a3xx. 3d textures can have different layer
+		 * for each miplevel on a6xx. 3d textures can have different layer
 		 * sizes for high levels, but the hw auto-sizer is buggy (or at least
 		 * different than what this code does), so as soon as the layer size
 		 * range gets into range, we stop reducing it.
 		 */
-		if (prsc->target == PIPE_TEXTURE_3D && (
-					level == 1 ||
-					(level > 1 && rsc->slices[level - 1].size0 > 0xf000)))
+		if (prsc->target == PIPE_TEXTURE_3D) {
+			if (level <= 1 || (rsc->slices[level - 1].size0 > 0xf000)) {
+				slice->size0 = align(blocks * rsc->cpp, alignment);
+			} else {
+				slice->size0 = rsc->slices[level - 1].size0;
+			}
+		} else {
 			slice->size0 = align(blocks * rsc->cpp, alignment);
-		else if (level == 0 || rsc->layer_first || alignment == 1)
-			slice->size0 = align(blocks * rsc->cpp, alignment);
-		else
-			slice->size0 = rsc->slices[level - 1].size0;
-
-#if 0
-		debug_printf("%s: %ux%ux%u@%u: %2u: stride=%4u, size=%7u, aligned_height=%3u\n",
-				util_format_name(prsc->format),
-				prsc->width0, prsc->height0, prsc->depth0, rsc->cpp,
-				level, slice->pitch * rsc->cpp,
-				slice->size0 * depth * layers_in_level,
-				aligned_height);
-#endif
+		}
 
 		size += slice->size0 * depth * layers_in_level;
+
+#if 0
+		debug_printf("%s: %ux%ux%u@%u:\t%2u: stride=%4u, size=%6u,%7u, aligned_height=%3u, blocks=%u\n",
+				util_format_name(prsc->format),
+				width, height, depth, rsc->cpp,
+				level, slice->pitch * rsc->cpp,
+				slice->size0, size, aligned_height, blocks);
+#endif
 
 		width = u_minify(width, 1);
 		height = u_minify(height, 1);

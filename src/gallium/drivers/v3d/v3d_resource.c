@@ -146,37 +146,13 @@ v3d_resource_transfer_unmap(struct pipe_context *pctx,
         slab_free(&v3d->transfer_pool, ptrans);
 }
 
-static void *
-v3d_resource_transfer_map(struct pipe_context *pctx,
-                          struct pipe_resource *prsc,
-                          unsigned level, unsigned usage,
-                          const struct pipe_box *box,
-                          struct pipe_transfer **pptrans)
+static void
+v3d_map_usage_prep(struct pipe_context *pctx,
+                   struct pipe_resource *prsc,
+                   unsigned usage)
 {
         struct v3d_context *v3d = v3d_context(pctx);
         struct v3d_resource *rsc = v3d_resource(prsc);
-        struct v3d_transfer *trans;
-        struct pipe_transfer *ptrans;
-        enum pipe_format format = prsc->format;
-        char *buf;
-
-        /* MSAA maps should have been handled by u_transfer_helper. */
-        assert(prsc->nr_samples <= 1);
-
-        /* Upgrade DISCARD_RANGE to WHOLE_RESOURCE if the whole resource is
-         * being mapped.
-         */
-        if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
-            !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
-            !(prsc->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) &&
-            prsc->last_level == 0 &&
-            prsc->width0 == box->width &&
-            prsc->height0 == box->height &&
-            prsc->depth0 == box->depth &&
-            prsc->array_size == 1 &&
-            rsc->bo->private) {
-                usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
-        }
 
         if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
                 if (v3d_resource_bo_alloc(rsc)) {
@@ -209,6 +185,41 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
                 rsc->writes++;
                 rsc->initialized_buffers = ~0;
         }
+}
+
+static void *
+v3d_resource_transfer_map(struct pipe_context *pctx,
+                          struct pipe_resource *prsc,
+                          unsigned level, unsigned usage,
+                          const struct pipe_box *box,
+                          struct pipe_transfer **pptrans)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+        struct v3d_resource *rsc = v3d_resource(prsc);
+        struct v3d_transfer *trans;
+        struct pipe_transfer *ptrans;
+        enum pipe_format format = prsc->format;
+        char *buf;
+
+        /* MSAA maps should have been handled by u_transfer_helper. */
+        assert(prsc->nr_samples <= 1);
+
+        /* Upgrade DISCARD_RANGE to WHOLE_RESOURCE if the whole resource is
+         * being mapped.
+         */
+        if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
+            !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
+            !(prsc->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) &&
+            prsc->last_level == 0 &&
+            prsc->width0 == box->width &&
+            prsc->height0 == box->height &&
+            prsc->depth0 == box->depth &&
+            prsc->array_size == 1 &&
+            rsc->bo->private) {
+                usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
+        }
+
+        v3d_map_usage_prep(pctx, prsc, usage);
 
         trans = slab_alloc(&v3d->transfer_pool);
         if (!trans)
@@ -293,6 +304,51 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
 fail:
         v3d_resource_transfer_unmap(pctx, ptrans);
         return NULL;
+}
+
+static void
+v3d_texture_subdata(struct pipe_context *pctx,
+                    struct pipe_resource *prsc,
+                    unsigned level,
+                    unsigned usage,
+                    const struct pipe_box *box,
+                    const void *data,
+                    unsigned stride,
+                    unsigned layer_stride)
+{
+        struct v3d_resource *rsc = v3d_resource(prsc);
+        struct v3d_resource_slice *slice = &rsc->slices[level];
+
+        /* For a direct mapping, we can just take the u_transfer path. */
+        if (!rsc->tiled) {
+                return u_default_texture_subdata(pctx, prsc, level, usage, box,
+                                                 data, stride, layer_stride);
+        }
+
+        /* Otherwise, map and store the texture data directly into the tiled
+         * texture.  Note that gallium's texture_subdata may be called with
+         * obvious usage flags missing!
+         */
+        v3d_map_usage_prep(pctx, prsc, usage | (PIPE_TRANSFER_WRITE |
+                                                PIPE_TRANSFER_DISCARD_RANGE));
+
+        void *buf;
+        if (usage & PIPE_TRANSFER_UNSYNCHRONIZED)
+                buf = v3d_bo_map_unsynchronized(rsc->bo);
+        else
+                buf = v3d_bo_map(rsc->bo);
+
+        for (int i = 0; i < box->depth; i++) {
+                v3d_store_tiled_image(buf +
+                                      v3d_layer_offset(&rsc->base,
+                                                       level,
+                                                       box->z + i),
+                                      slice->stride,
+                                      (void *)data + layer_stride * i,
+                                      stride,
+                                      slice->tiling, rsc->cpp, slice->padded_height,
+                                      box);
+        }
 }
 
 static void
@@ -431,6 +487,12 @@ v3d_setup_slices(struct v3d_resource *rsc, uint32_t winsys_stride)
          * UIF.
          */
         bool uif_top = msaa;
+
+        /* Check some easy mistakes to make in a resource_create() call that
+         * will break our setup.
+         */
+        assert(prsc->array_size != 0);
+        assert(prsc->depth0 != 0);
 
         for (int i = prsc->last_level; i >= 0; i--) {
                 struct v3d_resource_slice *slice = &rsc->slices[i];
@@ -828,6 +890,62 @@ fail:
         return NULL;
 }
 
+void
+v3d_update_shadow_texture(struct pipe_context *pctx,
+                          struct pipe_sampler_view *pview)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+        struct v3d_sampler_view *view = v3d_sampler_view(pview);
+        struct v3d_resource *shadow = v3d_resource(view->texture);
+        struct v3d_resource *orig = v3d_resource(pview->texture);
+
+        assert(view->texture != pview->texture);
+
+        if (shadow->writes == orig->writes && orig->bo->private)
+                return;
+
+        perf_debug("Updating %dx%d@%d shadow for linear texture\n",
+                   orig->base.width0, orig->base.height0,
+                   pview->u.tex.first_level);
+
+        for (int i = 0; i <= shadow->base.last_level; i++) {
+                unsigned width = u_minify(shadow->base.width0, i);
+                unsigned height = u_minify(shadow->base.height0, i);
+                struct pipe_blit_info info = {
+                        .dst = {
+                                .resource = &shadow->base,
+                                .level = i,
+                                .box = {
+                                        .x = 0,
+                                        .y = 0,
+                                        .z = 0,
+                                        .width = width,
+                                        .height = height,
+                                        .depth = 1,
+                                },
+                                .format = shadow->base.format,
+                        },
+                        .src = {
+                                .resource = &orig->base,
+                                .level = pview->u.tex.first_level + i,
+                                .box = {
+                                        .x = 0,
+                                        .y = 0,
+                                        .z = 0,
+                                        .width = width,
+                                        .height = height,
+                                        .depth = 1,
+                                },
+                                .format = orig->base.format,
+                        },
+                        .mask = util_format_get_mask(orig->base.format),
+                };
+                pctx->blit(pctx, &info);
+        }
+
+        shadow->writes = orig->writes;
+}
+
 static struct pipe_surface *
 v3d_create_surface(struct pipe_context *pctx,
                    struct pipe_resource *ptex,
@@ -980,7 +1098,7 @@ v3d_resource_context_init(struct pipe_context *pctx)
         pctx->transfer_flush_region = u_transfer_helper_transfer_flush_region;
         pctx->transfer_unmap = u_transfer_helper_transfer_unmap;
         pctx->buffer_subdata = u_default_buffer_subdata;
-        pctx->texture_subdata = u_default_texture_subdata;
+        pctx->texture_subdata = v3d_texture_subdata;
         pctx->create_surface = v3d_create_surface;
         pctx->surface_destroy = v3d_surface_destroy;
         pctx->resource_copy_region = util_resource_copy_region;

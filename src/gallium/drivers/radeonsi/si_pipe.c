@@ -501,7 +501,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	si_init_state_functions(sctx);
 	si_init_shader_functions(sctx);
 	si_init_viewport_functions(sctx);
-	si_init_ia_multi_vgt_param_table(sctx);
 
 	if (sctx->chip_class >= CIK)
 		cik_init_sdma_functions(sctx);
@@ -522,8 +521,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->blitter = util_blitter_create(&sctx->b);
 	if (sctx->blitter == NULL)
 		goto fail;
-	sctx->blitter->draw_rectangle = si_draw_rectangle;
 	sctx->blitter->skip_viewport_restore = true;
+
+	si_init_draw_functions(sctx);
 
 	sctx->sample_mask = 0xffff;
 
@@ -705,7 +705,7 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	mtx_destroy(&sscreen->shader_parts_mutex);
 	si_destroy_shader_cache(sscreen);
 
-	si_perfcounters_destroy(sscreen);
+	si_destroy_perfcounters(sscreen);
 	si_gpu_load_kill_thread(sscreen);
 
 	mtx_destroy(&sscreen->gpu_load_mutex);
@@ -723,39 +723,6 @@ static void si_init_gs_info(struct si_screen *sscreen)
 {
 	sscreen->gs_table_depth = ac_get_gs_table_depth(sscreen->info.chip_class,
 							sscreen->info.family);
-}
-
-static void si_handle_env_var_force_family(struct si_screen *sscreen)
-{
-	const char *family = debug_get_option("SI_FORCE_FAMILY", NULL);
-	unsigned i;
-
-	if (!family)
-		return;
-
-	for (i = CHIP_TAHITI; i < CHIP_LAST; i++) {
-		if (!strcmp(family, ac_get_llvm_processor_name(i))) {
-			/* Override family and chip_class. */
-			sscreen->info.family = i;
-			sscreen->info.name = "GCN-NOOP";
-
-			if (i >= CHIP_VEGA10)
-				sscreen->info.chip_class = GFX9;
-			else if (i >= CHIP_TONGA)
-				sscreen->info.chip_class = VI;
-			else if (i >= CHIP_BONAIRE)
-				sscreen->info.chip_class = CIK;
-			else
-				sscreen->info.chip_class = SI;
-
-			/* Don't submit any IBs. */
-			setenv("RADEON_NOOP", "1", 1);
-			return;
-		}
-	}
-
-	fprintf(stderr, "radeonsi: Unknown family: %s\n", family);
-	exit(1);
 }
 
 static void si_test_vmfault(struct si_screen *sscreen)
@@ -878,7 +845,6 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	sscreen->ws = ws;
 	ws->query_info(ws, &sscreen->info);
-	si_handle_env_var_force_family(sscreen);
 
 	if (sscreen->info.chip_class >= GFX9) {
 		sscreen->se_tile_repeat = 32 * sscreen->info.max_se;

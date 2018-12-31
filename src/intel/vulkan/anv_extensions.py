@@ -47,7 +47,7 @@ class ApiVersion:
         self.version = version
         self.enable = _bool_to_c_expr(enable)
 
-API_PATCH_VERSION = 90
+API_PATCH_VERSION = 96
 
 # Supported API versions.  Each one is the maximum patch version for the given
 # version.  Version come in increasing order and each version is available if
@@ -69,6 +69,7 @@ MAX_API_VERSION = None # Computed later
 # the those extension strings, then tests dEQP-VK.api.info.instance.extensions
 # and dEQP-VK.api.info.device fail due to the duplicated strings.
 EXTENSIONS = [
+    Extension('VK_ANDROID_external_memory_android_hardware_buffer', 3, 'ANDROID'),
     Extension('VK_ANDROID_native_buffer',                 5, 'ANDROID'),
     Extension('VK_KHR_16bit_storage',                     1, 'device->info.gen >= 8'),
     Extension('VK_KHR_8bit_storage',                      1, 'device->info.gen >= 8'),
@@ -121,7 +122,7 @@ EXTENSIONS = [
     Extension('VK_EXT_external_memory_dma_buf',           1, True),
     Extension('VK_EXT_global_priority',                   1,
               'device->has_context_priority'),
-    Extension('VK_EXT_pci_bus_info',                      1, True),
+    Extension('VK_EXT_pci_bus_info',                      2, True),
     Extension('VK_EXT_scalar_block_layout',               1, True),
     Extension('VK_EXT_shader_viewport_index_layer',       1, True),
     Extension('VK_EXT_shader_stencil_export',             1, 'device->info.gen >= 9'),

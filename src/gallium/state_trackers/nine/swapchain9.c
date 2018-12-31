@@ -128,6 +128,40 @@ D3DWindowBuffer_create(struct NineSwapChain9 *This,
     return ret;
 }
 
+static void
+D3DWindowBuffer_release(struct NineSwapChain9 *This,
+                        D3DWindowBuffer *present_handle)
+{
+    int i;
+    /* Add it to the 'pending release' list */
+    for (i = 0; i < D3DPRESENT_BACK_BUFFERS_MAX_EX + 1; i++) {
+        if (!This->present_handles_pending_release[i]) {
+            This->present_handles_pending_release[i] = present_handle;
+            break;
+        }
+    }
+    if (i == (D3DPRESENT_BACK_BUFFERS_MAX_EX + 1)) {
+        ERR("Server not releasing buffers...\n");
+        assert(false);
+    }
+
+    /* Destroy elements of the list released by the server */
+    for (i = 0; i < D3DPRESENT_BACK_BUFFERS_MAX_EX + 1; i++) {
+        if (This->present_handles_pending_release[i] &&
+            ID3DPresent_IsBufferReleased(This->present, This->present_handles_pending_release[i])) {
+            /* WaitBufferReleased also waits the presentation feedback
+             * (which should arrive at about the same time),
+             * while IsBufferReleased doesn't. DestroyD3DWindowBuffer unfortunately
+             * checks it to release immediately all data, else the release
+             * is postponed for This->present release. To avoid leaks (we may handle
+             * a lot of resize), call WaitBufferReleased. */
+            ID3DPresent_WaitBufferReleased(This->present, This->present_handles_pending_release[i]);
+            ID3DPresent_DestroyD3DWindowBuffer(This->present, This->present_handles_pending_release[i]);
+            This->present_handles_pending_release[i] = NULL;
+        }
+    }
+}
+
 static int
 NineSwapChain9_GetBackBufferCountForParams( struct NineSwapChain9 *This,
                                             D3DPRESENT_PARAMETERS *pParams );
@@ -291,7 +325,7 @@ NineSwapChain9_Resize( struct NineSwapChain9 *This,
         This->enable_threadpool = FALSE;
 
     for (i = 0; i < oldBufferCount; i++) {
-        ID3DPresent_DestroyD3DWindowBuffer(This->present, This->present_handles[i]);
+        D3DWindowBuffer_release(This, This->present_handles[i]);
         This->present_handles[i] = NULL;
         if (This->present_buffers[i])
             pipe_resource_reference(&(This->present_buffers[i]), NULL);
@@ -519,6 +553,11 @@ NineSwapChain9_dtor( struct NineSwapChain9 *This )
             FREE(This->pending_presentation[i]);
     }
 
+    for (i = 0; i < D3DPRESENT_BACK_BUFFERS_MAX_EX + 1; i++) {
+        if (This->present_handles_pending_release[i])
+            ID3DPresent_DestroyD3DWindowBuffer(This->present, This->present_handles_pending_release[i]);
+    }
+
     for (i = 0; i < This->num_back_buffers; i++) {
         if (This->buffers[i])
             NineUnknown_Detach(NineUnknown(This->buffers[i]));
@@ -676,7 +715,7 @@ present( struct NineSwapChain9 *This,
     struct pipe_fence_handle *fence;
     HRESULT hr;
     struct pipe_blit_info blit;
-    int target_width, target_height, target_depth;
+    int target_width, target_height, target_depth, i;
 
     DBG("present: This=%p pSourceRect=%p pDestRect=%p "
         "pDirtyRegion=%p hDestWindowOverride=%p"
@@ -714,6 +753,41 @@ present( struct NineSwapChain9 *This,
     ID3DPresent_GetWindowInfo(This->present, hDestWindowOverride, &target_width, &target_height, &target_depth);
     (void)target_depth;
 
+    /* Switch to using presentation buffers on window resize.
+     * Note: Most apps should resize the d3d back buffers when
+     * a window resize is detected, which will result in a call to
+     * NineSwapChain9_Resize. Thus everything will get released,
+     * and it will switch back to not using separate presentation
+     * buffers. */
+    if (!This->present_buffers[0] &&
+        (target_width != resource->width0 || target_height != resource->height0)) {
+        BOOL failure = false;
+        struct pipe_resource *new_resource[This->num_back_buffers];
+        D3DWindowBuffer *new_handles[This->num_back_buffers];
+        for (i = 0; i < This->num_back_buffers; i++) {
+            /* Note: if (!new_handles[i]), new_resource[i]
+             * gets released and contains NULL */
+            create_present_buffer(This, target_width, target_height, &new_resource[i], &new_handles[i]);
+            if (!new_handles[i])
+                failure = true;
+        }
+        if (failure) {
+            for (i = 0; i < This->num_back_buffers; i++) {
+                if (new_resource[i])
+                    pipe_resource_reference(&new_resource[i], NULL);
+                if (new_handles[i])
+                    D3DWindowBuffer_release(This, new_handles[i]);
+            }
+        } else {
+            for (i = 0; i < This->num_back_buffers; i++) {
+                D3DWindowBuffer_release(This, This->present_handles[i]);
+                This->present_handles[i] = new_handles[i];
+                pipe_resource_reference(&This->present_buffers[i], new_resource[i]);
+                pipe_resource_reference(&new_resource[i], NULL);
+            }
+        }
+    }
+
     pipe = NineDevice9_GetPipe(This->base.device);
 
     if (This->present_buffers[0]) {
@@ -738,13 +812,7 @@ present( struct NineSwapChain9 *This,
             create_present_buffer(This, target_width, target_height, &new_resource, &new_handle);
             /* Switch to the new buffer */
             if (new_handle) {
-                /* WaitBufferReleased also waits the presentation feedback,
-                 * while IsBufferReleased doesn't. DestroyD3DWindowBuffer unfortunately
-                 * checks it to release immediately all data, else the release
-                 * is postponed for This->present release. To avoid leaks (we may handle
-                 * a lot of resize), call WaitBufferReleased. */
-                ID3DPresent_WaitBufferReleased(This->present, This->present_handles[0]);
-                ID3DPresent_DestroyD3DWindowBuffer(This->present, This->present_handles[0]);
+                D3DWindowBuffer_release(This, This->present_handles[0]);
                 This->present_handles[0] = new_handle;
                 pipe_resource_reference(&This->present_buffers[0], new_resource);
                 pipe_resource_reference(&new_resource, NULL);

@@ -255,6 +255,9 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v2.max_combined_atomic_counters;
    case PIPE_CAP_MAX_COMBINED_HW_ATOMIC_COUNTER_BUFFERS:
       return vscreen->caps.caps.v2.max_combined_atomic_counter_buffers;
+   case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
+   case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
+      return 1; /* TODO: need to introduce a hw-cap for this */
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -267,8 +270,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-   case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
-   case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_DEPTH_BOUNDS_TEST:
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_CLEAR_TEXTURE:
@@ -742,7 +743,7 @@ virgl_destroy_screen(struct pipe_screen *screen)
    struct virgl_screen *vscreen = virgl_screen(screen);
    struct virgl_winsys *vws = vscreen->vws;
 
-   slab_destroy_parent(&vscreen->texture_transfer_pool);
+   slab_destroy_parent(&vscreen->transfer_pool);
 
    if (vws)
       vws->destroy(vws);
@@ -782,7 +783,7 @@ virgl_create_screen(struct virgl_winsys *vws)
 
    screen->refcnt = 1;
 
-   slab_create_parent(&screen->texture_transfer_pool, sizeof(struct virgl_transfer), 16);
+   slab_create_parent(&screen->transfer_pool, sizeof(struct virgl_transfer), 16);
 
    return &screen->base;
 }

@@ -1349,70 +1349,61 @@ _anv_combine_address(struct anv_batch *batch, void *location,
            _dst = NULL;                                                 \
          }))
 
-#define GEN7_MOCS (struct GEN7_MEMORY_OBJECT_CONTROL_STATE) {  \
-   .GraphicsDataTypeGFDT                        = 0,           \
-   .LLCCacheabilityControlLLCCC                 = 0,           \
-   .L3CacheabilityControlL3CC                   = 1,           \
-}
+/* MEMORY_OBJECT_CONTROL_STATE:
+ * .GraphicsDataTypeGFDT                        = 0,
+ * .LLCCacheabilityControlLLCCC                 = 0,
+ * .L3CacheabilityControlL3CC                   = 1,
+ */
+#define GEN7_MOCS 1
 
-#define GEN75_MOCS (struct GEN75_MEMORY_OBJECT_CONTROL_STATE) {  \
-   .LLCeLLCCacheabilityControlLLCCC             = 0,           \
-   .L3CacheabilityControlL3CC                   = 1,           \
-}
+/* MEMORY_OBJECT_CONTROL_STATE:
+ * .LLCeLLCCacheabilityControlLLCCC             = 0,
+ * .L3CacheabilityControlL3CC                   = 1,
+ */
+#define GEN75_MOCS 1
 
-#define GEN8_MOCS (struct GEN8_MEMORY_OBJECT_CONTROL_STATE) {  \
-      .MemoryTypeLLCeLLCCacheabilityControl = WB,              \
-      .TargetCache = L3DefertoPATforLLCeLLCselection,          \
-      .AgeforQUADLRU = 0                                       \
-   }
+/* MEMORY_OBJECT_CONTROL_STATE:
+ * .MemoryTypeLLCeLLCCacheabilityControl = WB,
+ * .TargetCache = L3DefertoPATforLLCeLLCselection,
+ * .AgeforQUADLRU = 0
+ */
+#define GEN8_MOCS 0x78
 
-#define GEN8_EXTERNAL_MOCS (struct GEN8_MEMORY_OBJECT_CONTROL_STATE) {     \
-      .MemoryTypeLLCeLLCCacheabilityControl = UCwithFenceifcoherentcycle,  \
-      .TargetCache = L3DefertoPATforLLCeLLCselection,                      \
-      .AgeforQUADLRU = 0                                                   \
-   }
+/* MEMORY_OBJECT_CONTROL_STATE:
+ * .MemoryTypeLLCeLLCCacheabilityControl = UCwithFenceifcoherentcycle,
+ * .TargetCache = L3DefertoPATforLLCeLLCselection,
+ * .AgeforQUADLRU = 0
+ */
+#define GEN8_EXTERNAL_MOCS 0x18
 
 /* Skylake: MOCS is now an index into an array of 62 different caching
  * configurations programmed by the kernel.
  */
 
-#define GEN9_MOCS (struct GEN9_MEMORY_OBJECT_CONTROL_STATE) {  \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */              \
-      .IndextoMOCSTables                           = 2         \
-   }
+/* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
+#define GEN9_MOCS 2
 
-#define GEN9_EXTERNAL_MOCS (struct GEN9_MEMORY_OBJECT_CONTROL_STATE) {  \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                       \
-      .IndextoMOCSTables                           = 1                  \
-   }
+/* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
+#define GEN9_EXTERNAL_MOCS 1
 
 /* Cannonlake MOCS defines are duplicates of Skylake MOCS defines. */
-#define GEN10_MOCS (struct GEN10_MEMORY_OBJECT_CONTROL_STATE) {  \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */              \
-      .IndextoMOCSTables                           = 2         \
-   }
-
-#define GEN10_EXTERNAL_MOCS (struct GEN10_MEMORY_OBJECT_CONTROL_STATE) {   \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                          \
-      .IndextoMOCSTables                           = 1                     \
-   }
+#define GEN10_MOCS GEN9_MOCS
+#define GEN10_EXTERNAL_MOCS GEN9_EXTERNAL_MOCS
 
 /* Ice Lake MOCS defines are duplicates of Skylake MOCS defines. */
-#define GEN11_MOCS (struct GEN11_MEMORY_OBJECT_CONTROL_STATE) {  \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */              \
-      .IndextoMOCSTables                           = 2         \
-   }
-
-#define GEN11_EXTERNAL_MOCS (struct GEN11_MEMORY_OBJECT_CONTROL_STATE) {   \
-      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */                          \
-      .IndextoMOCSTables                           = 1                     \
-   }
+#define GEN11_MOCS GEN9_MOCS
+#define GEN11_EXTERNAL_MOCS GEN9_EXTERNAL_MOCS
 
 struct anv_device_memory {
    struct anv_bo *                              bo;
    struct anv_memory_type *                     type;
    VkDeviceSize                                 map_size;
    void *                                       map;
+
+   /* If set, we are holding reference to AHardwareBuffer
+    * which we must release when memory is freed.
+    */
+   struct AHardwareBuffer *                     ahw;
 };
 
 /**
@@ -2564,6 +2555,7 @@ struct anv_format_plane {
 
 struct anv_format {
    struct anv_format_plane planes[3];
+   VkFormat vk_format;
    uint8_t n_planes;
    bool can_ycbcr;
 };
@@ -2677,6 +2669,7 @@ struct anv_image {
    uint32_t samples; /**< VkImageCreateInfo::samples */
    uint32_t n_planes;
    VkImageUsageFlags usage; /**< Superset of VkImageCreateInfo::usage. */
+   VkImageCreateFlags create_flags; /* Flags used when creating image. */
    VkImageTiling tiling; /** VkImageCreateInfo::tiling */
 
    /** True if this is needs to be bound to an appropriately tiled BO.
@@ -2701,6 +2694,14 @@ struct anv_image {
     * single one with different offsets.
     */
    bool disjoint;
+
+   /* All the formats that can be used when creating views of this image
+    * are CCS_E compatible.
+    */
+   bool ccs_e_compatible;
+
+   /* Image was created with external format. */
+   bool external_format;
 
    /**
     * Image subsurfaces
@@ -3076,6 +3077,7 @@ struct anv_image_create_info {
    isl_surf_usage_flags_t isl_extra_usage_flags;
 
    uint32_t stride;
+   bool external_format;
 };
 
 VkResult anv_image_create(VkDevice _device,
@@ -3122,6 +3124,11 @@ anv_sanitize_image_offset(const VkImageType imageType,
    }
 }
 
+VkFormatFeatureFlags
+anv_get_image_format_features(const struct gen_device_info *devinfo,
+                              VkFormat vk_format,
+                              const struct anv_format *anv_format,
+                              VkImageTiling vk_tiling);
 
 void anv_fill_buffer_surface_state(struct anv_device *device,
                                    struct anv_state state,

@@ -752,6 +752,8 @@ struct brw_context
                                         struct brw_bo *bo,
                                         uint32_t offset_in_bytes,
                                         uint32_t report_id);
+
+      void (*emit_compute_walker)(struct brw_context *brw);
    } vtbl;
 
    struct brw_bufmgr *bufmgr;
@@ -841,6 +843,8 @@ struct brw_context
    /** @} */
 
    GLuint primitive; /**< Hardware primitive, such as _3DPRIM_TRILIST. */
+
+   bool object_preemption; /**< Object level preemption enabled. */
 
    GLenum reduced_primitive;
 

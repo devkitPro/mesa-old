@@ -387,16 +387,14 @@ new_shader_window(struct aub_mem *mem, uint64_t address, const char *desc)
    window->base.display = display_shader_window;
    window->base.destroy = destroy_shader_window;
 
-   struct gen_batch_decode_bo shader_bo;
-   if (mem->pml4)
-      shader_bo = aub_mem_get_ppgtt_bo(mem, address);
-   else
-      shader_bo = aub_mem_get_ggtt_bo(mem, address);
-
+   struct gen_batch_decode_bo shader_bo =
+      aub_mem_get_ppgtt_bo(mem, address);
    if (shader_bo.map) {
       FILE *f = open_memstream(&window->shader, &window->shader_size);
       if (f) {
-         gen_disasm_disassemble(context.file->disasm, shader_bo.map, 0, f);
+         gen_disasm_disassemble(context.file->disasm,
+                                (const uint8_t *) shader_bo.map +
+                                (address - shader_bo.addr), 0, f);
          fclose(f);
       }
    }
@@ -995,6 +993,7 @@ display_aubfile_window(struct window *win)
    ImGui::ColorEdit3("error", (float *)&cfg->error_color, cflags); ImGui::SameLine();
    ImGui::ColorEdit3("highlight", (float *)&cfg->highlight_color, cflags); ImGui::SameLine();
    ImGui::ColorEdit3("dwords", (float *)&cfg->dwords_color, cflags); ImGui::SameLine();
+   ImGui::ColorEdit3("booleans", (float *)&cfg->boolean_color, cflags); ImGui::SameLine();
 
    if (ImGui::Button("Commands list") || has_ctrl_key('c')) { show_commands_window(); } ImGui::SameLine();
    if (ImGui::Button("Registers list") || has_ctrl_key('r')) { show_register_window(); } ImGui::SameLine();

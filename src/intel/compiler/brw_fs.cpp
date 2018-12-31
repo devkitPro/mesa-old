@@ -2406,6 +2406,16 @@ fs_visitor::opt_algebraic()
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:
+         if ((inst->conditional_mod == BRW_CONDITIONAL_Z ||
+              inst->conditional_mod == BRW_CONDITIONAL_NZ) &&
+             inst->dst.is_null() &&
+             (inst->src[0].abs || inst->src[0].negate)) {
+            inst->src[0].abs = false;
+            inst->src[0].negate = false;
+            progress = true;
+            break;
+         }
+
          if (inst->src[0].file != IMM)
             break;
 
@@ -2510,13 +2520,12 @@ fs_visitor::opt_algebraic()
          }
          break;
       case BRW_OPCODE_CMP:
-         if (inst->conditional_mod == BRW_CONDITIONAL_GE &&
-             inst->src[0].abs &&
-             inst->src[0].negate &&
-             inst->src[1].is_zero()) {
+         if ((inst->conditional_mod == BRW_CONDITIONAL_Z ||
+              inst->conditional_mod == BRW_CONDITIONAL_NZ) &&
+             inst->src[1].is_zero() &&
+             (inst->src[0].abs || inst->src[0].negate)) {
             inst->src[0].abs = false;
             inst->src[0].negate = false;
-            inst->conditional_mod = BRW_CONDITIONAL_Z;
             progress = true;
             break;
          }
@@ -4472,6 +4481,7 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
                                 const fs_reg &coordinate,
                                 const fs_reg &shadow_c,
                                 fs_reg lod, const fs_reg &lod2,
+                                const fs_reg &min_lod,
                                 const fs_reg &sample_index,
                                 const fs_reg &mcs,
                                 const fs_reg &surface,
@@ -4682,6 +4692,15 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
          bld.MOV(sources[length++], offset(coordinate, bld, i));
    }
 
+   if (min_lod.file != BAD_FILE) {
+      /* Account for all of the missing coordinate sources */
+      length += 4 - coord_components;
+      if (op == SHADER_OPCODE_TXD)
+         length += (3 - grad_components) * 2;
+
+      bld.MOV(sources[length++], min_lod);
+   }
+
    int mlen;
    if (reg_width == 2)
       mlen = length * reg_width - header_size;
@@ -4713,6 +4732,7 @@ lower_sampler_logical_send(const fs_builder &bld, fs_inst *inst, opcode op)
    const fs_reg &shadow_c = inst->src[TEX_LOGICAL_SRC_SHADOW_C];
    const fs_reg &lod = inst->src[TEX_LOGICAL_SRC_LOD];
    const fs_reg &lod2 = inst->src[TEX_LOGICAL_SRC_LOD2];
+   const fs_reg &min_lod = inst->src[TEX_LOGICAL_SRC_MIN_LOD];
    const fs_reg &sample_index = inst->src[TEX_LOGICAL_SRC_SAMPLE_INDEX];
    const fs_reg &mcs = inst->src[TEX_LOGICAL_SRC_MCS];
    const fs_reg &surface = inst->src[TEX_LOGICAL_SRC_SURFACE];
@@ -4725,7 +4745,8 @@ lower_sampler_logical_send(const fs_builder &bld, fs_inst *inst, opcode op)
 
    if (devinfo->gen >= 7) {
       lower_sampler_logical_send_gen7(bld, inst, op, coordinate,
-                                      shadow_c, lod, lod2, sample_index,
+                                      shadow_c, lod, lod2, min_lod,
+                                      sample_index,
                                       mcs, surface, sampler, tg4_offset,
                                       coord_components, grad_components);
    } else if (devinfo->gen >= 5) {
@@ -5262,6 +5283,14 @@ static unsigned
 get_sampler_lowered_simd_width(const struct gen_device_info *devinfo,
                                const fs_inst *inst)
 {
+   /* If we have a min_lod parameter on anything other than a simple sample
+    * message, it will push it over 5 arguments and we have to fall back to
+    * SIMD8.
+    */
+   if (inst->opcode != SHADER_OPCODE_TEX &&
+       inst->components_read(TEX_LOGICAL_SRC_MIN_LOD))
+      return 8;
+
    /* Calculate the number of coordinate components that have to be present
     * assuming that additional arguments follow the texel coordinates in the
     * message payload.  On IVB+ there is no need for padding, on ILK-SNB we
@@ -6035,6 +6064,11 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
                     brw_vf_to_float((inst->src[i].ud >>  8) & 0xff),
                     brw_vf_to_float((inst->src[i].ud >> 16) & 0xff),
                     brw_vf_to_float((inst->src[i].ud >> 24) & 0xff));
+            break;
+         case BRW_REGISTER_TYPE_V:
+         case BRW_REGISTER_TYPE_UV:
+            fprintf(file, "%08x%s", inst->src[i].ud,
+                    inst->src[i].type == BRW_REGISTER_TYPE_V ? "V" : "UV");
             break;
          default:
             fprintf(file, "???");

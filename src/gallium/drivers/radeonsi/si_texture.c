@@ -303,7 +303,7 @@ static int si_init_surface(struct si_screen *sscreen,
 		flags |= RADEON_SURF_SHAREABLE;
 	if (is_imported)
 		flags |= RADEON_SURF_IMPORTED | RADEON_SURF_SHAREABLE;
-	if (!(ptex->flags & SI_RESOURCE_FLAG_FORCE_TILING))
+	if (!(ptex->flags & SI_RESOURCE_FLAG_FORCE_MSAA_TILING))
 		flags |= RADEON_SURF_OPTIMIZE_FOR_SPACE;
 
 	r = sscreen->ws->surface_init(sscreen->ws, ptex, flags, bpe,
@@ -1293,7 +1293,7 @@ si_choose_tiling(struct si_screen *sscreen,
 		 const struct pipe_resource *templ, bool tc_compatible_htile)
 {
 	const struct util_format_description *desc = util_format_description(templ->format);
-	bool force_tiling = templ->flags & SI_RESOURCE_FLAG_FORCE_TILING;
+	bool force_tiling = templ->flags & SI_RESOURCE_FLAG_FORCE_MSAA_TILING;
 	bool is_depth_stencil = util_format_is_depth_or_stencil(templ->format) &&
 				!(templ->flags & SI_RESOURCE_FLAG_FLUSHED_DEPTH);
 
@@ -2283,11 +2283,10 @@ void vi_separate_dcc_process_and_reset_stats(struct pipe_context *ctx,
 		union pipe_query_result result;
 
 		/* Read the results. */
-		ctx->get_query_result(ctx, sctx->dcc_stats[i].ps_stats[2],
+		struct pipe_query *query = sctx->dcc_stats[i].ps_stats[2];
+		ctx->get_query_result(ctx, query,
 				      true, &result);
-		si_query_hw_reset_buffers(sctx,
-					  (struct si_query_hw*)
-					  sctx->dcc_stats[i].ps_stats[2]);
+		si_query_buffer_reset(sctx, &((struct si_query_hw*)query)->buffer);
 
 		/* Compute the approximate number of fullscreen draws. */
 		tex->ps_draw_ratio =

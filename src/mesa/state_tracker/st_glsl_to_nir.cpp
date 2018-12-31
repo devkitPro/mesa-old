@@ -81,7 +81,7 @@ st_nir_fixup_varying_slots(struct st_context *st, struct exec_list *var_list)
  * on varying-slot w/ the VS outputs)
  */
 static void
-st_nir_assign_vs_in_locations(struct gl_program *prog, nir_shader *nir)
+st_nir_assign_vs_in_locations(nir_shader *nir)
 {
    nir->num_inputs = 0;
    nir_foreach_variable_safe(var, &nir->inputs) {
@@ -328,7 +328,7 @@ st_nir_opts(nir_shader *nir, bool scalar)
       NIR_PASS(progress, nir, nir_opt_if);
       NIR_PASS(progress, nir, nir_opt_dead_cf);
       NIR_PASS(progress, nir, nir_opt_cse);
-      NIR_PASS(progress, nir, nir_opt_peephole_select, 8);
+      NIR_PASS(progress, nir, nir_opt_peephole_select, 8, true, true);
 
       NIR_PASS(progress, nir, nir_opt_algebraic);
       NIR_PASS(progress, nir, nir_opt_constant_folding);
@@ -758,7 +758,8 @@ st_link_nir(struct gl_context *ctx,
           * the pipe_stream_output->output_register field is based on the
           * pre-compacted driver_locations.
           */
-         if (!prev_shader->sh.LinkedTransformFeedback)
+         if (!(prev_shader->sh.LinkedTransformFeedback &&
+               prev_shader->sh.LinkedTransformFeedback->NumVarying > 0))
             nir_compact_varyings(shader_program->_LinkedShaders[prev]->Program->nir,
                               nir, ctx->API != API_OPENGL_COMPAT);
       }
@@ -809,7 +810,7 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
 
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       /* Needs special handling so drvloc matches the vbo state: */
-      st_nir_assign_vs_in_locations(prog, nir);
+      st_nir_assign_vs_in_locations(nir);
       /* Re-lower global vars, to deal with any dead VS inputs. */
       NIR_PASS_V(nir, nir_lower_global_vars_to_local);
 
