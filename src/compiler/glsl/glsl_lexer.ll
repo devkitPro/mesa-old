@@ -173,7 +173,7 @@ literal_integer(char *text, int len, struct _mesa_glsl_parse_state *state,
    else
       lval->n = (int)value;
 
-   if (is_long && !is_uint && base == 10 && value > (uint64_t)LONG_LONG_MAX + 1) {
+   if (is_long && !is_uint && base == 10 && value > (uint64_t)INT64_MAX + 1) {
       /* Tries to catch unintentionally providing a negative value. */
       _mesa_glsl_warning(lloc, state,
                          "signed literal value `%s' is interpreted as %lld",
